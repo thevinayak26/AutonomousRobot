@@ -114,8 +114,8 @@ class SerialBridge(Node):
                 if line.startswith('E,'):
                     parts = line.split(',')
                     if len(parts) == 3:
-                        lt = -int(parts[2])
-                        rt = -int(parts[1])
+                        lt = int(parts[1])
+                        rt = -int(parts[2])
                         with self.ticks_lock:
                             self.latest_ticks = (lt, rt)
             except (serial.SerialException, ValueError, OSError) as e:
