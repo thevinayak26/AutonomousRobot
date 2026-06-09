@@ -16,7 +16,7 @@ def generate_launch_description():
                 'port': '/dev/ttyACM0',
                 'baud': 115200,
                 'wheel_separation': 0.40,
-                'ticks_per_metre': 7480.0,
+                'ticks_per_metre': 5030.0,
                 'max_pwm': 180,
                 'max_linear_vel': 0.22,
                 'max_angular_vel': 2.84,
