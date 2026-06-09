@@ -20,7 +20,7 @@ class SerialBridge(Node):
 
         self.declare_parameter('port', '/dev/ttyACM0')
         self.declare_parameter('baud', 115200)
-        self.declare_parameter('wheel_separation', 0.40)
+        self.declare_parameter('wheel_separation', 0.247)
         self.declare_parameter('ticks_per_metre', 5030.0)
         self.declare_parameter('max_pwm', 180)
         self.declare_parameter('max_linear_vel', 0.22)

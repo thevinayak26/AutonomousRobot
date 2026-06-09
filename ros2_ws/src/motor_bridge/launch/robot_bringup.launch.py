@@ -15,7 +15,7 @@ def generate_launch_description():
             parameters=[{
                 'port': '/dev/ttyACM0',
                 'baud': 115200,
-                'wheel_separation': 0.40,
+                'wheel_separation': 0.247,
                 'ticks_per_metre': 5030.0,
                 'max_pwm': 180,
                 'max_linear_vel': 0.22,
