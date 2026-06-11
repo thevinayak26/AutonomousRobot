@@ -129,6 +129,7 @@ pkill -f static_transform_publisher 2>/dev/null || true
 pkill -f safety_layer 2>/dev/null || true
 pkill -f frontier_explorer 2>/dev/null || true
 pkill -f coverage_benchmark 2>/dev/null || true
+pkill -f rosbridge 2>/dev/null || true
 sleep 2
 echo "      Done."
 echo ""
@@ -176,6 +177,11 @@ ros2 lifecycle set /slam_toolbox configure
 sleep 2
 ros2 lifecycle set /slam_toolbox activate
 sleep 2
+# rosbridge (dashboard websocket on :9090)
+echo "      Starting rosbridge..."
+ros2 launch rosbridge_server rosbridge_websocket_launch.xml &
+ROSBRIDGE_PID=$!
+sleep 2
 # Track extra PIDs
 SAFETY_PID=""
 EXPLORE_PID=""
@@ -213,6 +219,7 @@ echo "  EKF           : PID $EKF_PID"
 echo "  LiDAR         : PID $LIDAR_PID"
 echo "  Static TF     : PID $TF_PID"
 echo "  SLAM          : PID $SLAM_PID"
+echo "  rosbridge     : PID $ROSBRIDGE_PID"
 [ -n "$SAFETY_PID" ]  && echo "  Safety Layer  : PID $SAFETY_PID"
 [ -n "$EXPLORE_PID" ] && echo "  Explorer      : PID $EXPLORE_PID"
 [ -n "$BENCH_PID" ]   && echo "  Benchmark     : PID $BENCH_PID"
@@ -237,8 +244,8 @@ echo ""
 cleanup() {
     echo ""
     echo "Stopping all nodes..."
-    kill $SERIAL_PID $IMU_TF_PID $IMU_PID $EKF_PID $LIDAR_PID $TF_PID $SLAM_PID $SAFETY_PID $EXPLORE_PID $BENCH_PID 2>/dev/null
-    wait $SERIAL_PID $IMU_TF_PID $IMU_PID $EKF_PID $LIDAR_PID $TF_PID $SLAM_PID $SAFETY_PID $EXPLORE_PID $BENCH_PID 2>/dev/null
+    kill $ROSBRIDGE_PID $SERIAL_PID $IMU_TF_PID $IMU_PID $EKF_PID $LIDAR_PID $TF_PID $SLAM_PID $SAFETY_PID $EXPLORE_PID $BENCH_PID 2>/dev/null
+    wait $ROSBRIDGE_PID $SERIAL_PID $IMU_TF_PID $IMU_PID $EKF_PID $LIDAR_PID $TF_PID $SLAM_PID $SAFETY_PID $EXPLORE_PID $BENCH_PID 2>/dev/null
     echo "All nodes stopped."
     exit 0
 }
