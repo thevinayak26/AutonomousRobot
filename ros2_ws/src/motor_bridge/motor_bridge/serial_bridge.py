@@ -1,8 +1,20 @@
 #!/usr/bin/env python3
 """
 Serial bridge between ROS 2 and Arduino motor controller.
+
 Subscribes to /cmd_vel, converts to motor PWM, sends to Arduino.
-Reads encoder ticks from Arduino, publishes odometry.
+Reads encoder ticks from Arduino, publishes WHEEL odometry.
+
+>>> CHANGES FOR EKF FUSION (vs the version from May 28) <<<
+1. Odometry is now published on 'odom/wheel' (not 'odom').
+   robot_localization (ekf_node) consumes this and outputs the fused 'odom'.
+2. The odom->base_link TF broadcast is now GUARDED by the 'publish_tf' param,
+   which defaults to FALSE. In EKF mode the EKF owns that transform, so this
+   node must NOT also publish it (two publishers on one transform = broken TF).
+   If you ever want to run WITHOUT the EKF again, set publish_tf:=true.
+3. Pose/twist covariances are now filled in. robot_localization needs these to
+   weight the fusion. Wheel heading is deliberately given a LOOSE covariance so
+   the filter trusts the IMU gyro for turning.
 """
 import rclpy
 from rclpy.node import Node
@@ -13,6 +25,7 @@ import serial
 import math
 import time
 import threading
+
 
 class SerialBridge(Node):
     def __init__(self):
@@ -25,6 +38,10 @@ class SerialBridge(Node):
         self.declare_parameter('max_pwm', 180)
         self.declare_parameter('max_linear_vel', 0.22)
         self.declare_parameter('max_angular_vel', 2.84)
+        # NEW: when False (default), do NOT broadcast odom->base_link.
+        # The EKF publishes that transform instead. Set true only if running
+        # without robot_localization.
+        self.declare_parameter('publish_tf', False)
 
         self.port = self.get_parameter('port').value
         self.baud = self.get_parameter('baud').value
@@ -33,13 +50,15 @@ class SerialBridge(Node):
         self.max_pwm = self.get_parameter('max_pwm').value
         self.max_lin = self.get_parameter('max_linear_vel').value
         self.max_ang = self.get_parameter('max_angular_vel').value
+        self.publish_tf = self.get_parameter('publish_tf').value
 
         self.ser = None
         self.connect_serial()
 
         self.cmd_sub = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
-        self.odom_pub = self.create_publisher(Odometry, 'odom', 50)
-        self.tf_broadcaster = TransformBroadcaster(self)
+        # CHANGED: 'odom' -> 'odom/wheel' so the EKF can fuse it.
+        self.odom_pub = self.create_publisher(Odometry, 'odom/wheel', 50)
+        self.tf_broadcaster = TransformBroadcaster(self)  # only used if publish_tf
 
         self.x = 0.0
         self.y = 0.0
@@ -52,23 +71,21 @@ class SerialBridge(Node):
         self.last_cmd_time = time.time()
         self.watchdog_timer = self.create_timer(0.1, self.watchdog_callback)
 
-        # Store latest ticks from serial thread, publish from timer (ROS thread)
         self.latest_ticks = None
         self.ticks_lock = threading.Lock()
 
-        # Timer to publish odom from ROS thread (not from serial thread)
         self.odom_timer = self.create_timer(0.05, self.odom_timer_callback)
 
         self.serial_thread = threading.Thread(target=self.read_serial, daemon=True)
         self.serial_thread.start()
 
-        self.get_logger().info(f'Serial bridge started on {self.port}')
+        mode = 'WHEEL ODOM ONLY (EKF owns TF)' if not self.publish_tf else 'STANDALONE (broadcasting TF)'
+        self.get_logger().info(f'Serial bridge started on {self.port} | mode: {mode}')
 
     def connect_serial(self):
         try:
             self.ser = serial.Serial(self.port, self.baud, timeout=0.5)
             time.sleep(2)
-            # Flush any garbage from Arduino reset
             self.ser.reset_input_buffer()
             self.get_logger().info(f'Connected to Arduino on {self.port}')
         except serial.SerialException as e:
@@ -88,8 +105,8 @@ class SerialBridge(Node):
         self.send_motor_command(left_pwm, right_pwm)
 
     def send_motor_command(self, left, right):
-        # Arduino M1 = right motor, M2 = left motor
-        # Right motor is physically reversed, so negate it
+        # Arduino M1 = right motor, M2 = left motor.
+        # Right motor is physically reversed, so negate it.
         # Send: first value -> M1 (right motor), second value -> M2 (left motor)
         if self.ser and self.ser.is_open:
             cmd = f"M,{-right},{left}\n"
@@ -114,6 +131,9 @@ class SerialBridge(Node):
                 if line.startswith('E,'):
                     parts = line.split(',')
                     if len(parts) == 3:
+                        # NOTE: keep these signs CONSISTENT with the on-ground
+                        # calibration you verified. If forward drive makes x
+                        # DECREASE, flip the signs here (and only here).
                         lt = int(parts[1])
                         rt = -int(parts[2])
                         with self.ticks_lock:
@@ -172,17 +192,38 @@ class SerialBridge(Node):
         odom.pose.pose.orientation.w = math.cos(self.theta / 2.0)
         odom.twist.twist.linear.x = linear_vel
         odom.twist.twist.angular.z = angular_vel
+
+        # --- Covariances for robot_localization ---------------------------
+        # Diagonal order: [x, y, z, roll, pitch, yaw]
+        # Wheel heading (yaw) is loose on purpose so the EKF trusts the IMU.
+        odom.pose.covariance[0]  = 0.02    # x
+        odom.pose.covariance[7]  = 0.02    # y
+        odom.pose.covariance[14] = 1e6     # z (unused in 2D)
+        odom.pose.covariance[21] = 1e6     # roll (unused)
+        odom.pose.covariance[28] = 1e6     # pitch (unused)
+        odom.pose.covariance[35] = 0.2     # yaw (loose)
+        odom.twist.covariance[0]  = 0.01   # vx (fused)
+        odom.twist.covariance[7]  = 1e6    # vy (no sideways motion)
+        odom.twist.covariance[14] = 1e6    # vz
+        odom.twist.covariance[21] = 1e6    # v roll
+        odom.twist.covariance[28] = 1e6    # v pitch
+        odom.twist.covariance[35] = 0.1    # v yaw (IMU is preferred, so loose here)
+        # -------------------------------------------------------------------
+
         self.odom_pub.publish(odom)
 
-        t = TransformStamped()
-        t.header.stamp = now.to_msg()
-        t.header.frame_id = 'odom'
-        t.child_frame_id = 'base_link'
-        t.transform.translation.x = self.x
-        t.transform.translation.y = self.y
-        t.transform.rotation.z = math.sin(self.theta / 2.0)
-        t.transform.rotation.w = math.cos(self.theta / 2.0)
-        self.tf_broadcaster.sendTransform(t)
+        # Only broadcast TF if explicitly told to (i.e. running WITHOUT the EKF).
+        # In EKF mode this stays off and robot_localization publishes odom->base_link.
+        if self.publish_tf:
+            t = TransformStamped()
+            t.header.stamp = now.to_msg()
+            t.header.frame_id = 'odom'
+            t.child_frame_id = 'base_link'
+            t.transform.translation.x = self.x
+            t.transform.translation.y = self.y
+            t.transform.rotation.z = math.sin(self.theta / 2.0)
+            t.transform.rotation.w = math.cos(self.theta / 2.0)
+            self.tf_broadcaster.sendTransform(t)
 
 
 def main():

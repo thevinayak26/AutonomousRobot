@@ -1,7 +1,12 @@
-ekf_filter_node:
+# EKF config — autonomous robot, written 2026-06-11
+# Fuses wheel odometry forward velocity (vx) with MPU6050 gyro yaw rate.
+# EKF owns the odom -> base_link TF. serial_bridge must run with publish_tf=false.
+# Launch: ros2 run robot_localization ekf_node --ros-args --params-file ~/ros2_ws/ekf_config.yaml
+
+/**:
   ros__parameters:
     frequency: 30.0
-    sensor_timeout: 0.1
+    sensor_timeout: 0.2
     two_d_mode: true
     publish_tf: true
     publish_acceleration: false
@@ -11,40 +16,26 @@ ekf_filter_node:
     base_link_frame: base_link
     world_frame: odom
 
-    # Wheel odometry
-    odom0: /odom
-    odom0_config: [true, true, false,    # x, y, z position
-                   false, false, true,    # roll, pitch, yaw
-                   true, true, false,     # x, y, z velocity
-                   false, false, true,    # roll, pitch, yaw velocity
-                   false, false, false]   # x, y, z acceleration
+    # Wheel odometry from serial_bridge: fuse ONLY vx.
+    # Order: x y z, roll pitch yaw, vx vy vz, vroll vpitch vyaw, ax ay az
+    odom0: /odom/wheel
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  false, false,
+                   false, false, false,
+                   false, false, false]
     odom0_differential: false
     odom0_relative: false
+    odom0_queue_size: 10
 
-    # IMU
+    # MPU6050 via imu_node (frame_id: imu_link): fuse ONLY yaw rate.
     imu0: /imu/data
-    imu0_config: [false, false, false,    # x, y, z position
-                  false, false, false,    # roll, pitch, yaw (not from IMU, we use gyro rate)
-                  false, false, false,    # x, y, z velocity
-                  false, false, true,     # roll, pitch, yaw velocity (gyro z = heading rate)
-                  true, true, false]      # x, y, z acceleration
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
     imu0_differential: false
     imu0_relative: false
+    imu0_queue_size: 10
     imu0_remove_gravitational_acceleration: true
-
-    # Process noise (tune these if odometry drifts)
-    process_noise_covariance: [0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                               0.0,  0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                               0.0,  0.0,  0.06, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                               0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                               0.0,  0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                               0.0,  0.0,  0.0,  0.0,  0.0,  0.06, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.025,0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.025,0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.04, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,  0.0,
-                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,
-                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.02, 0.0,  0.0,  0.0,
-                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,
-                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,
-                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.015]
