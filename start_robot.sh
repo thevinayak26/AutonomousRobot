@@ -159,7 +159,7 @@ sleep 3
 
 # Static transform
 echo "      Starting static transform (base_link -> laser_frame)..."
-ros2 run tf2_ros static_transform_publisher 0 0 0.15 -0.805 0 0 base_link laser_frame &
+ros2 run tf2_ros static_transform_publisher 0 0 0.15 0 0 0 base_link laser_frame &  # yaw was -0.805 rad before LiDAR physically realigned to forward 2026-06-09
 TF_PID=$!
 sleep 2
 
