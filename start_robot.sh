@@ -8,14 +8,11 @@
 #   bash ~/start_robot.sh --explore --benchmark  — autonomous + benchmark
 #
 # Press Ctrl+C to stop everything.
-
 set -e
-
 # Parse flags
 USE_SAFETY=false
 USE_EXPLORE=false
 USE_BENCHMARK=false
-
 for arg in "$@"; do
     case $arg in
         --safe)     USE_SAFETY=true ;;
@@ -23,12 +20,10 @@ for arg in "$@"; do
         --benchmark) USE_BENCHMARK=true ;;
     esac
 done
-
 echo "============================================"
 echo "  AUTONOMOUS NAVIGATION ROBOT - STARTING"
 echo "============================================"
 echo ""
-
 if $USE_EXPLORE; then
     echo "  Mode: AUTONOMOUS EXPLORATION"
 elif $USE_SAFETY; then
@@ -40,7 +35,6 @@ if $USE_BENCHMARK; then
     echo "  Benchmark: ENABLED"
 fi
 echo ""
-
 # Step 0: Sync clock via NTP (needs internet/WiFi)
 echo "[1/7] Syncing clock..."
 sudo timedatectl set-ntp true 2>/dev/null
@@ -52,14 +46,12 @@ else
     echo "      Run from laptop: ssh ubuntu@PI_IP \"echo 'ubuntu123' | sudo -S date -s '\$(date -u)'\""
 fi
 echo ""
-
 # Step 1: Source ROS
 echo "[2/7] Sourcing ROS 2 Jazzy..."
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
 echo "      Done."
 echo ""
-
 # Step 2: Create slam params if missing
 echo "[3/7] Checking SLAM params..."
 if [ ! -f /tmp/slam_params.yaml ]; then
@@ -121,16 +113,16 @@ else
     echo "      Already exists."
 fi
 echo ""
-
 # Step 3: Set permissions
 echo "[4/7] Setting device permissions..."
 sudo chmod 666 /dev/ttyACM0 2>/dev/null && echo "      /dev/ttyACM0 ready (Arduino)" || echo "      WARNING: /dev/ttyACM0 not found — is Arduino plugged in?"
 sudo chmod 666 /dev/ttyUSB0 2>/dev/null && echo "      /dev/ttyUSB0 ready (LiDAR)" || echo "      WARNING: /dev/ttyUSB0 not found — is LiDAR plugged in?"
 echo ""
-
 # Step 4: Kill any leftover ROS nodes from previous runs
 echo "[5/7] Cleaning up old processes..."
 pkill -f serial_bridge 2>/dev/null || true
+pkill -f imu_node 2>/dev/null || true
+pkill -f ekf_node 2>/dev/null || true
 pkill -f rplidar 2>/dev/null || true
 pkill -f slam_toolbox 2>/dev/null || true
 pkill -f static_transform_publisher 2>/dev/null || true
@@ -140,78 +132,84 @@ pkill -f coverage_benchmark 2>/dev/null || true
 sleep 2
 echo "      Done."
 echo ""
-
 # Step 5: Launch core nodes
 echo "[6/7] Starting core ROS nodes..."
 echo ""
-
-# Serial bridge
+# Serial bridge (publishes /odom/wheel; EKF owns odom->base_link TF)
 echo "      Starting serial_bridge..."
 ros2 run motor_bridge serial_bridge &
 SERIAL_PID=$!
 sleep 3
-
+# IMU static transform (IMU mounted flat, +X forward, back-left quarter)
+echo "      Starting static transform (base_link -> imu_link)..."
+ros2 run tf2_ros static_transform_publisher --x 0 --y 0 --z 0 --roll 0 --pitch 0 --yaw 0 --frame-id base_link --child-frame-id imu_link &
+IMU_TF_PID=$!
+sleep 1
+# IMU node — blocks ~4s calibrating. ROBOT MUST BE STILL.
+echo "      Starting IMU (keep robot STILL for calibration)..."
+ros2 run motor_bridge imu_node &
+IMU_PID=$!
+sleep 6
+# EKF — fuses /odom/wheel (vx) + /imu/data (yaw rate), owns odom->base_link
+echo "      Starting EKF (robot_localization)..."
+ros2 run robot_localization ekf_node --ros-args --params-file ~/ros2_ws/ekf_config.yaml &
+EKF_PID=$!
+sleep 2
 # LiDAR
 echo "      Starting LiDAR..."
 ros2 run rplidar_ros rplidar_composition --ros-args -p serial_port:=/dev/ttyUSB0 -p serial_baudrate:=115200 -p scan_mode:=Standard &
 LIDAR_PID=$!
 sleep 3
-
 # Static transform
 echo "      Starting static transform (base_link -> laser_frame)..."
 ros2 run tf2_ros static_transform_publisher 0 0 0.15 0 0 0 base_link laser_frame &  # yaw was -0.805 rad before LiDAR physically realigned to forward 2026-06-09
 TF_PID=$!
 sleep 2
-
 # SLAM
 echo "      Starting SLAM..."
 ros2 run slam_toolbox async_slam_toolbox_node --ros-args --params-file /tmp/slam_params.yaml &
 SLAM_PID=$!
 sleep 10
-
 # Activate SLAM lifecycle
 echo "      Activating SLAM..."
 ros2 lifecycle set /slam_toolbox configure
 sleep 2
 ros2 lifecycle set /slam_toolbox activate
 sleep 2
-
 # Track extra PIDs
 SAFETY_PID=""
 EXPLORE_PID=""
 BENCH_PID=""
-
 # Step 6: Launch optional nodes
 echo "[7/7] Starting optional nodes..."
 echo ""
-
 if $USE_SAFETY; then
     echo "      Starting safety layer..."
     ros2 run motor_bridge safety_layer &
     SAFETY_PID=$!
     sleep 1
 fi
-
 if $USE_EXPLORE; then
     echo "      Starting frontier explorer..."
     ros2 run motor_bridge frontier_explorer --ros-args -r cmd_vel:=cmd_vel_raw &
     EXPLORE_PID=$!
     sleep 1
 fi
-
 if $USE_BENCHMARK; then
     echo "      Starting coverage benchmark..."
     ros2 run motor_bridge coverage_benchmark &
     BENCH_PID=$!
     sleep 1
 fi
-
 echo ""
 echo "============================================"
 echo "  ALL NODES RUNNING"
 echo "============================================"
 echo ""
 echo "  Serial Bridge : PID $SERIAL_PID"
+echo "  IMU TF        : PID $IMU_TF_PID"
+echo "  IMU Node      : PID $IMU_PID"
+echo "  EKF           : PID $EKF_PID"
 echo "  LiDAR         : PID $LIDAR_PID"
 echo "  Static TF     : PID $TF_PID"
 echo "  SLAM          : PID $SLAM_PID"
@@ -219,7 +217,6 @@ echo "  SLAM          : PID $SLAM_PID"
 [ -n "$EXPLORE_PID" ] && echo "  Explorer      : PID $EXPLORE_PID"
 [ -n "$BENCH_PID" ]   && echo "  Benchmark     : PID $BENCH_PID"
 echo ""
-
 if $USE_EXPLORE; then
     echo "  Robot will explore autonomously!"
     echo "  Press Ctrl+C to stop."
@@ -236,17 +233,15 @@ echo ""
 echo "  Press Ctrl+C to stop everything."
 echo "============================================"
 echo ""
-
 # Trap Ctrl+C to kill all background nodes
 cleanup() {
     echo ""
     echo "Stopping all nodes..."
-    kill $SERIAL_PID $LIDAR_PID $TF_PID $SLAM_PID $SAFETY_PID $EXPLORE_PID $BENCH_PID 2>/dev/null
-    wait $SERIAL_PID $LIDAR_PID $TF_PID $SLAM_PID $SAFETY_PID $EXPLORE_PID $BENCH_PID 2>/dev/null
+    kill $SERIAL_PID $IMU_TF_PID $IMU_PID $EKF_PID $LIDAR_PID $TF_PID $SLAM_PID $SAFETY_PID $EXPLORE_PID $BENCH_PID 2>/dev/null
+    wait $SERIAL_PID $IMU_TF_PID $IMU_PID $EKF_PID $LIDAR_PID $TF_PID $SLAM_PID $SAFETY_PID $EXPLORE_PID $BENCH_PID 2>/dev/null
     echo "All nodes stopped."
     exit 0
 }
 trap cleanup SIGINT SIGTERM
-
 # Wait for any background process to exit
 wait
