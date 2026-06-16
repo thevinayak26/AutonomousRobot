@@ -106,7 +106,7 @@ class IMUNode(Node):
     def calibrate(self):
         """Average 200 readings at rest to get offsets."""
         self.get_logger().info('Calibrating IMU — keep robot still for 4 seconds...')
-        samples = 200
+        samples = 500
         gx_sum = 0.0
         gy_sum = 0.0
         gz_sum = 0.0

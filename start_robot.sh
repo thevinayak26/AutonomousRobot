@@ -20,9 +20,9 @@ for arg in "$@"; do
         --benchmark) USE_BENCHMARK=true ;;
     esac
 done
-echo "============================================"
-echo "  AUTONOMOUS NAVIGATION ROBOT - STARTING"
-echo "============================================"
+echo ""
+echo "STARTING: AUTONOMOUS NAVIGATION ROBOT"
+echo ""
 echo ""
 if $USE_EXPLORE; then
     echo "  Mode: AUTONOMOUS EXPLORATION"
@@ -238,7 +238,7 @@ else
 fi
 echo ""
 echo "  Press Ctrl+C to stop everything."
-echo "============================================"
+echo ""
 echo ""
 # Trap Ctrl+C to kill all background nodes
 cleanup() {
