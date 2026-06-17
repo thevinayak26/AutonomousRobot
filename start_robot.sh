@@ -75,14 +75,14 @@ slam_toolbox:
     map_update_interval: 2.0
     resolution: 0.05
     max_laser_range: 12.0
-    minimum_time_interval: 0.5
+    minimum_time_interval: 0.0
     transform_timeout: 0.2
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000
     use_scan_matching: true
     use_scan_barycenter: true
-    minimum_travel_distance: 0.1
-    minimum_travel_heading: 0.1
+    minimum_travel_distance: 0.05
+    minimum_travel_heading: 0.01
     scan_buffer_size: 10
     scan_buffer_maximum_scan_distance: 10.0
     link_match_minimum_response_fine: 0.1
@@ -163,7 +163,7 @@ LIDAR_PID=$!
 sleep 3
 # Static transform
 echo "      Starting static transform (base_link -> laser_frame)..."
-ros2 run tf2_ros static_transform_publisher 0 0 0.15 0 0 0 base_link laser_frame &  # yaw was -0.805 rad before LiDAR physically realigned to forward 2026-06-09
+ros2 run tf2_ros static_transform_publisher --x 0 --y 0 --z 0.15 --roll 0 --pitch 0 --yaw 0 --frame-id base_link --child-frame-id laser_frame &  # modernized syntax, fixes stale TF stamp
 TF_PID=$!
 sleep 2
 # SLAM
