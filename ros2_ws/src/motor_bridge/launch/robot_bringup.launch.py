@@ -18,7 +18,7 @@ def generate_launch_description():
                 'wheel_separation': 0.247,
                 'ticks_per_metre': 5030.0,
                 'max_pwm': 180,
-                'max_linear_vel': 0.22,
+                'max_linear_vel': 0.45,
                 'max_angular_vel': 2.84,
             }],
             output='screen',

@@ -7,3 +7,6 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
+ekf_config.yaml.bak
+*.preFix
+*.bak

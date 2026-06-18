@@ -36,7 +36,7 @@ class SerialBridge(Node):
         self.declare_parameter('wheel_separation', 0.247)
         self.declare_parameter('ticks_per_metre', 5030.0)
         self.declare_parameter('max_pwm', 180)
-        self.declare_parameter('max_linear_vel', 0.22)
+        self.declare_parameter('max_linear_vel', 0.45)
         self.declare_parameter('max_angular_vel', 2.84)
         # NEW: when False (default), do NOT broadcast odom->base_link.
         # The EKF publishes that transform instead. Set true only if running
