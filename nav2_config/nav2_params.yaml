@@ -30,7 +30,7 @@ controller_server:
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.20            # arrive within 20 cm (small robot)
+      xy_goal_tolerance: 0.10            # arrive within 20 cm (small robot)
       yaw_goal_tolerance: 0.30           # ~17 deg heading tolerance
       stateful: true
 
