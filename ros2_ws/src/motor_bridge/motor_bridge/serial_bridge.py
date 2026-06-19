@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """
-Serial bridge between ROS 2 and Arduino motor controller.
+Serial bridge between ROS 2 and Arduino PID motor controller (V / velocity mode).
 
-Subscribes to /cmd_vel, converts to motor PWM, sends to Arduino.
-Reads encoder ticks from Arduino, publishes WHEEL odometry.
+Subscribes to /cmd_vel, converts to encoder ticks/sec, sends "V,..." (PID).
+Reads encoder ticks from Arduino, publishes WHEEL odometry on 'odom/wheel'.
 
->>> CHANGES FOR EKF FUSION (vs the version from May 28) <<<
-1. Odometry is now published on 'odom/wheel' (not 'odom').
-   robot_localization (ekf_node) consumes this and outputs the fused 'odom'.
-2. The odom->base_link TF broadcast is now GUARDED by the 'publish_tf' param,
-   which defaults to FALSE. In EKF mode the EKF owns that transform, so this
-   node must NOT also publish it (two publishers on one transform = broken TF).
-   If you ever want to run WITHOUT the EKF again, set publish_tf:=true.
-3. Pose/twist covariances are now filled in. robot_localization needs these to
-   weight the fusion. Wheel heading is deliberately given a LOOSE covariance so
-   the filter trusts the IMU gyro for turning.
+>>> SAFETY (added after a PID runaway) <<<
+- The firmware holds its last PID target until told otherwise. A plain "V,0,0"
+  does NOT reliably stop it (integral windup). So a TRUE stop = firmware "S",
+  which exits PID mode and halts. We send "S":
+    * on startup, * on watchdog timeout (no cmd for 0.5s),
+    * on an explicit zero command, * on shutdown.
+- Conservative PID gains are pushed to the firmware on connect (P,Kp,Ki,Kd) so
+  it can never boot with the aggressive untuned defaults that caused the runaway.
+- Wheel velocity is hard-clamped; NaN/inf commands are rejected.
+
+EKF MODE (unchanged): odom on 'odom/wheel', publish_tf defaults False (EKF owns
+odom->base_link), covariances filled, wheel yaw loose so EKF trusts the IMU.
 """
 import rclpy
 from rclpy.node import Node
@@ -35,30 +37,35 @@ class SerialBridge(Node):
         self.declare_parameter('baud', 115200)
         self.declare_parameter('wheel_separation', 0.247)
         self.declare_parameter('ticks_per_metre', 5030.0)
-        self.declare_parameter('max_pwm', 180)
         self.declare_parameter('max_linear_vel', 0.45)
         self.declare_parameter('max_angular_vel', 2.84)
-        # NEW: when False (default), do NOT broadcast odom->base_link.
-        # The EKF publishes that transform instead. Set true only if running
-        # without robot_localization.
         self.declare_parameter('publish_tf', False)
+        # PID gains pushed to firmware on connect. SAFE/low by default.
+        self.declare_parameter('pid_kp', 0.05)
+        self.declare_parameter('pid_ki', 0.02)
+        self.declare_parameter('pid_kd', 0.0)
 
         self.port = self.get_parameter('port').value
         self.baud = self.get_parameter('baud').value
         self.wheel_sep = self.get_parameter('wheel_separation').value
         self.ticks_per_m = self.get_parameter('ticks_per_metre').value
-        self.max_pwm = self.get_parameter('max_pwm').value
         self.max_lin = self.get_parameter('max_linear_vel').value
         self.max_ang = self.get_parameter('max_angular_vel').value
         self.publish_tf = self.get_parameter('publish_tf').value
+        self.kp = self.get_parameter('pid_kp').value
+        self.ki = self.get_parameter('pid_ki').value
+        self.kd = self.get_parameter('pid_kd').value
+
+        # Hard clamp: max physical wheel speed (m/s) => max ticks/sec.
+        self.max_wheel_vel = self.max_lin + self.max_ang * self.wheel_sep / 2.0
 
         self.ser = None
+        self.stopped = True          # avoid spamming 'S' when already idle
         self.connect_serial()
 
         self.cmd_sub = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
-        # CHANGED: 'odom' -> 'odom/wheel' so the EKF can fuse it.
         self.odom_pub = self.create_publisher(Odometry, 'odom/wheel', 50)
-        self.tf_broadcaster = TransformBroadcaster(self)  # only used if publish_tf
+        self.tf_broadcaster = TransformBroadcaster(self)
 
         self.x = 0.0
         self.y = 0.0
@@ -80,14 +87,20 @@ class SerialBridge(Node):
         self.serial_thread.start()
 
         mode = 'WHEEL ODOM ONLY (EKF owns TF)' if not self.publish_tf else 'STANDALONE (broadcasting TF)'
-        self.get_logger().info(f'Serial bridge started on {self.port} | mode: {mode}')
+        self.get_logger().info(
+            f'Serial bridge (PID V-mode) on {self.port} | {mode} | '
+            f'gains Kp={self.kp} Ki={self.ki} Kd={self.kd} | max_wheel={self.max_wheel_vel:.2f} m/s')
 
     def connect_serial(self):
         try:
             self.ser = serial.Serial(self.port, self.baud, timeout=0.5)
             time.sleep(2)
             self.ser.reset_input_buffer()
-            self.get_logger().info(f'Connected to Arduino on {self.port}')
+            # Boot into a known SAFE state: stop, then set conservative gains.
+            self.ser.write(b"S\n")
+            time.sleep(0.05)
+            self.ser.write(f"P,{self.kp},{self.ki},{self.kd}\n".encode())
+            self.get_logger().info(f'Connected to Arduino on {self.port} (sent S + safe gains)')
         except serial.SerialException as e:
             self.get_logger().error(f'Failed to connect: {e}')
             self.ser = None
@@ -96,28 +109,55 @@ class SerialBridge(Node):
         self.last_cmd_time = time.time()
         lin = msg.linear.x
         ang = msg.angular.z
+
+        # Reject garbage commands outright.
+        if not (math.isfinite(lin) and math.isfinite(ang)):
+            self.get_logger().warn('Non-finite cmd_vel rejected; stopping.')
+            self.send_stop()
+            return
+
         left_vel = lin - (ang * self.wheel_sep / 2.0)
         right_vel = lin + (ang * self.wheel_sep / 2.0)
-        left_pwm = int(self.max_pwm * left_vel / self.max_lin) if self.max_lin != 0 else 0
-        right_pwm = int(self.max_pwm * right_vel / self.max_lin) if self.max_lin != 0 else 0
-        left_pwm = max(-255, min(255, left_pwm))
-        right_pwm = max(-255, min(255, right_pwm))
-        self.send_motor_command(left_pwm, right_pwm)
 
-    def send_motor_command(self, left, right):
-        # Arduino M1 = right motor, M2 = left motor.
-        # Right motor is physically reversed, so negate it.
-        # Send: first value -> M1 (right motor), second value -> M2 (left motor)
+        # Explicit (near) zero command => true stop, not a held PID target.
+        if abs(left_vel) < 1e-3 and abs(right_vel) < 1e-3:
+            self.send_stop()
+            return
+
+        # Hard clamp each wheel to the physical max.
+        left_vel = max(-self.max_wheel_vel, min(self.max_wheel_vel, left_vel))
+        right_vel = max(-self.max_wheel_vel, min(self.max_wheel_vel, right_vel))
+
+        left_tps = (math.copysign((abs(left_vel) + 0.0966) / 2.802, left_vel) if abs(left_vel) > 1e-3 else 0.0) * self.ticks_per_m
+        right_tps = (math.copysign((abs(right_vel) + 0.0966) / 2.802, right_vel) if abs(right_vel) > 1e-3 else 0.0) * self.ticks_per_m
+        self.send_velocity(left_tps, right_tps)
+
+    def send_velocity(self, left_tps, right_tps):
+        # Arduino M1 = right motor (physically reversed -> negate), M2 = left motor.
+        # First value -> firmware 'left' target (= our right, negated),
+        # second value -> firmware 'right' target (= our left). SAME order as old M cmd.
         if self.ser and self.ser.is_open:
-            cmd = f"M,{-right},{left}\n"
+            cmd = f"V,{-right_tps:.0f},{left_tps:.0f}\n"
             try:
                 self.ser.write(cmd.encode())
+                self.stopped = False
             except serial.SerialException:
                 self.get_logger().warn('Serial write failed')
 
+    def send_stop(self):
+        """True stop: firmware 'S' exits PID mode and halts. Idempotent guard avoids spam."""
+        if self.stopped:
+            return
+        if self.ser and self.ser.is_open:
+            try:
+                self.ser.write(b"S\n")
+                self.stopped = True
+            except serial.SerialException:
+                self.get_logger().warn('Serial stop write failed')
+
     def watchdog_callback(self):
         if time.time() - self.last_cmd_time > 0.5:
-            self.send_motor_command(0, 0)
+            self.send_stop()
 
     def read_serial(self):
         """Background thread: reads serial lines and stores ticks."""
@@ -131,9 +171,8 @@ class SerialBridge(Node):
                 if line.startswith('E,'):
                     parts = line.split(',')
                     if len(parts) == 3:
-                        # NOTE: keep these signs CONSISTENT with the on-ground
-                        # calibration you verified. If forward drive makes x
-                        # DECREASE, flip the signs here (and only here).
+                        # Keep these signs CONSISTENT with the verified on-ground
+                        # calibration. If forward drive makes x DECREASE, flip here only.
                         lt = int(parts[1])
                         rt = -int(parts[2])
                         with self.ticks_lock:
@@ -194,8 +233,6 @@ class SerialBridge(Node):
         odom.twist.twist.angular.z = angular_vel
 
         # --- Covariances for robot_localization ---------------------------
-        # Diagonal order: [x, y, z, roll, pitch, yaw]
-        # Wheel heading (yaw) is loose on purpose so the EKF trusts the IMU.
         odom.pose.covariance[0]  = 0.02    # x
         odom.pose.covariance[7]  = 0.02    # y
         odom.pose.covariance[14] = 1e6     # z (unused in 2D)
@@ -207,13 +244,11 @@ class SerialBridge(Node):
         odom.twist.covariance[14] = 1e6    # vz
         odom.twist.covariance[21] = 1e6    # v roll
         odom.twist.covariance[28] = 1e6    # v pitch
-        odom.twist.covariance[35] = 0.1    # v yaw (IMU is preferred, so loose here)
+        odom.twist.covariance[35] = 0.1    # v yaw (IMU preferred, loose here)
         # -------------------------------------------------------------------
 
         self.odom_pub.publish(odom)
 
-        # Only broadcast TF if explicitly told to (i.e. running WITHOUT the EKF).
-        # In EKF mode this stays off and robot_localization publishes odom->base_link.
         if self.publish_tf:
             t = TransformStamped()
             t.header.stamp = now.to_msg()
@@ -234,8 +269,12 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        # Guarantee motors are stopped on exit.
         if node.ser and node.ser.is_open:
-            node.ser.write(b"S\n")
+            try:
+                node.ser.write(b"S\n")
+            except Exception:
+                pass
             node.ser.close()
         node.destroy_node()
         rclpy.shutdown()
