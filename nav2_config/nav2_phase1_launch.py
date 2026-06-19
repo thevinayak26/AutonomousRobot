@@ -29,7 +29,7 @@ def generate_launch_description():
             name='controller_server',
             output='screen',
             parameters=[PARAMS],
-            remappings=[('cmd_vel', 'cmd_vel_smoothed')],
+            remappings=[('cmd_vel', 'cmd_vel_nav')],
         ),
         Node(
             package='nav2_planner',
