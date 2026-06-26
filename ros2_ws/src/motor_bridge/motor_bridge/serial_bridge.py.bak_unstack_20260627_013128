@@ -2,27 +2,28 @@
 """
 Serial bridge between ROS 2 and Arduino PID motor controller (V / velocity mode).
 
-Clean rewrite 2026-06-27 (v2). Division of responsibility:
-  * FIRMWARE owns motion smoothing: slew-rate ramp, friction floor, PID with
-    filtered derivative and conditional-integration anti-windup. The bridge does
-    NOT ramp or deadband-bump anymore. Stacking a second ramp here fought the
-    firmware ramp and caused low-speed stutter, so it was removed.
-  * BRIDGE is a thin, safe pass-through: cmd_vel -> wheel tps -> "V,..." plus
-    odometry out, plus all the hard safety (true 'S' stop, watchdog, clamp,
-    NaN reject, gains-on-connect).
+Subscribes to /cmd_vel, converts to encoder ticks/sec, sends "V,..." (PID).
+Reads encoder ticks from Arduino, publishes WHEEL odometry on 'odom/wheel'.
 
-One control timer (50 ms) owns every serial write so there is never more than
-one writer. cmd_vel only updates the target; the timer sends it (or a true stop).
+This is a clean rewrite (2026-06-27). Behaviour vs the old bridge:
+  * Single fixed-rate control loop (50 ms) owns ALL serial writes. cmd_vel just
+    updates targets; the loop ramps current -> target and sends. This removes the
+    jitter caused by mixing per-callback sends with a separate ramp timer.
+  * Slew-rate limiting on BOTH accel and decel for jerk-free starts and stops.
+  * Deadband-aware: very small nonzero targets are snapped to a minimum drive
+    tps so the wheel does not sit on the PID friction floor stuttering.
+  * Safety preserved: true 'S' stop on startup / watchdog / zero-cmd / shutdown,
+    conservative gains pushed on connect, hard wheel clamp, NaN/inf rejection.
 
 EKF MODE: odom on 'odom/wheel'; publish_tf defaults False (EKF owns
 odom->base_link); covariances filled; wheel yaw loose so EKF trusts the IMU.
 
-Sign / slot conventions (firmware rewrite 2026-06-27, verified on ground):
-  Firmware "E,leftTicks,rightTicks". Right ISR now counts POSITIVE on forward,
-  so BOTH raw values are positive when driving forward.
-  Send slots cross: firmware slot1 = our RIGHT, slot2 = our LEFT
-      -> cmd = f"V,{right_tps},{left_tps}".
-  Decode (both positive on forward): lt = int(parts[2]), rt = int(parts[1]).
+Encoder / sign conventions (verified on-ground 2026-06-26/27):
+  Firmware publishes "E,leftTicks,rightTicks".
+  The send path crosses slots: firmware slot1 = our RIGHT target,
+  slot2 = our LEFT target  ->  cmd = f"V,{right_tps},{left_tps}".
+  Decode: lt = -int(parts[2]) (left), rt = int(parts[1]) (right),
+  so BOTH wheels yield POSITIVE ticks when driven forward.
   Do not change signs without an on-ground spin test.
 """
 import rclpy
@@ -54,7 +55,16 @@ class SerialBridge(Node):
         self.declare_parameter('pid_ki', 0.08)
         self.declare_parameter('pid_kd', 0.0)
 
+        # Motion shaping.
+        # control_period: how often the loop runs and writes serial.
+        # accel_tps_per_s: how fast wheel target may rise  (ramp up).
+        # decel_tps_per_s: how fast it may fall            (ramp down).
+        # min_drive_tps:   any nonzero target below this is bumped up to it,
+        #                  so the wheel clears the PID/friction floor cleanly.
         self.declare_parameter('control_period', 0.05)
+        self.declare_parameter('accel_tps_per_s', 4000.0)
+        self.declare_parameter('decel_tps_per_s', 6000.0)
+        self.declare_parameter('min_drive_tps', 250.0)
         self.declare_parameter('cmd_timeout', 0.5)
 
         self.port = self.get_parameter('port').value
@@ -68,20 +78,26 @@ class SerialBridge(Node):
         self.ki = self.get_parameter('pid_ki').value
         self.kd = self.get_parameter('pid_kd').value
         self.ctrl_dt = self.get_parameter('control_period').value
+        self.accel_step = self.get_parameter('accel_tps_per_s').value * self.ctrl_dt
+        self.decel_step = self.get_parameter('decel_tps_per_s').value * self.ctrl_dt
+        self.min_drive_tps = self.get_parameter('min_drive_tps').value
         self.cmd_timeout = self.get_parameter('cmd_timeout').value
 
-        # Hard clamp: max physical wheel speed (m/s).
+        # Hard clamp: max physical wheel speed (m/s) => max ticks/sec.
         self.max_wheel_vel = self.max_lin + self.max_ang * self.wheel_sep / 2.0
+        self.max_wheel_tps = self._vel_to_tps(self.max_wheel_vel)
 
         # ---- serial -----------------------------------------------------
         self.ser = None
         self.serial_lock = threading.Lock()
-        self.stopped = True
+        self.stopped = True            # avoid spamming 'S' when already idle
         self.connect_serial()
 
-        # ---- target state (set by cmd_vel, sent by control timer) -------
+        # ---- motion state ----------------------------------------------
         self.target_left_tps = 0.0
         self.target_right_tps = 0.0
+        self.cur_left_tps = 0.0
+        self.cur_right_tps = 0.0
         self.last_cmd_time = time.time()
 
         # ---- odometry state --------------------------------------------
@@ -101,7 +117,9 @@ class SerialBridge(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # ---- timers -----------------------------------------------------
+        # ONE control loop owns serial writes (ramp + send / stop).
         self.control_timer = self.create_timer(self.ctrl_dt, self.control_loop)
+        # Odom publish from a separate timer (read-only on serial via thread).
         self.odom_timer = self.create_timer(0.05, self.odom_timer_callback)
 
         # ---- serial read thread ----------------------------------------
@@ -110,19 +128,44 @@ class SerialBridge(Node):
 
         mode = 'WHEEL ODOM ONLY (EKF owns TF)' if not self.publish_tf else 'STANDALONE (broadcasting TF)'
         self.get_logger().info(
-            f'Serial bridge (PID V-mode, thin pass-through) on {self.port} | {mode} | '
+            f'Serial bridge (PID V-mode, rewrite) on {self.port} | {mode} | '
             f'gains Kp={self.kp} Ki={self.ki} Kd={self.kd} | '
-            f'max_wheel={self.max_wheel_vel:.2f} m/s | firmware owns slew+floor')
+            f'max_wheel={self.max_wheel_vel:.2f} m/s ({self.max_wheel_tps:.0f} tps) | '
+            f'accel={self.accel_step:.0f} decel={self.decel_step:.0f} tps/step | '
+            f'min_drive={self.min_drive_tps:.0f} tps')
 
     # ====================================================================
     #  helpers
     # ====================================================================
     def _vel_to_tps(self, vel):
-        """Affine velocity calibration: send = (|vel| + 0.0966) / 2.802, signed,
-        then * ticks_per_m. Firmware response is offset+scaled, not linear."""
+        """Affine velocity calibration (firmware response is offset+scaled).
+        send = (|vel| + 0.0966) / 2.802, signed, then * ticks_per_m."""
         if abs(vel) <= 1e-3:
             return 0.0
         return math.copysign((abs(vel) + 0.0966) / 2.802, vel) * self.ticks_per_m
+
+    def _apply_deadband(self, tps):
+        """Bump any nonzero target up to min_drive_tps so the wheel clears the
+        friction/PID floor instead of stuttering on it. Zero stays zero."""
+        if abs(tps) < 1e-3:
+            return 0.0
+        if abs(tps) < self.min_drive_tps:
+            return math.copysign(self.min_drive_tps, tps)
+        return tps
+
+    @staticmethod
+    def _ramp(cur, tgt, up_step, down_step):
+        """Move cur toward tgt, bounded. Uses up_step when |tgt|>|cur| (speeding
+        up) and down_step when slowing toward zero."""
+        d = tgt - cur
+        if abs(d) < 1e-6:
+            return tgt
+        # Are we increasing magnitude (accel) or decreasing (decel)?
+        speeding_up = abs(tgt) > abs(cur) and (cur == 0.0 or (tgt * cur) >= 0)
+        step = up_step if speeding_up else down_step
+        if abs(d) <= step:
+            return tgt
+        return cur + math.copysign(step, d)
 
     # ====================================================================
     #  serial connect / read
@@ -132,6 +175,7 @@ class SerialBridge(Node):
             self.ser = serial.Serial(self.port, self.baud, timeout=0.5)
             time.sleep(2)
             self.ser.reset_input_buffer()
+            # Boot SAFE: stop, then push conservative gains.
             self.ser.write(b"S\n")
             time.sleep(0.05)
             self.ser.write(f"P,{self.kp},{self.ki},{self.kd}\n".encode())
@@ -142,6 +186,7 @@ class SerialBridge(Node):
             self.ser = None
 
     def read_serial(self):
+        """Background thread: read E,left,right lines, stash latest ticks."""
         while rclpy.ok():
             if self.ser is None or not self.ser.is_open:
                 time.sleep(1)
@@ -152,18 +197,17 @@ class SerialBridge(Node):
                 if line.startswith('E,'):
                     parts = line.split(',')
                     if len(parts) == 3:
-                        # Both wheels positive on forward (firmware rewrite).
-                        lt = int(parts[2])
+                        # Both wheels positive on forward (verified on ground).
+                        lt = -int(parts[2])
                         rt = int(parts[1])
                         with self.ticks_lock:
                             self.latest_ticks = (lt, rt)
-                # 'D,' debug lines (commanded PWM) are ignored here.
             except (serial.SerialException, ValueError, OSError) as e:
                 self.get_logger().warn(f'Serial read error: {e}')
                 time.sleep(0.5)
 
     # ====================================================================
-    #  command intake (sets targets only)
+    #  command intake (NO serial write here — only sets targets)
     # ====================================================================
     def cmd_vel_callback(self, msg):
         self.last_cmd_time = time.time()
@@ -179,30 +223,45 @@ class SerialBridge(Node):
         left_vel = lin - (ang * self.wheel_sep / 2.0)
         right_vel = lin + (ang * self.wheel_sep / 2.0)
 
+        # Hard clamp each wheel to physical max.
         left_vel = max(-self.max_wheel_vel, min(self.max_wheel_vel, left_vel))
         right_vel = max(-self.max_wheel_vel, min(self.max_wheel_vel, right_vel))
 
-        self.target_left_tps = self._vel_to_tps(left_vel)
-        self.target_right_tps = self._vel_to_tps(right_vel)
+        lt = self._vel_to_tps(left_vel)
+        rt = self._vel_to_tps(right_vel)
+
+        # Deadband bump so small targets don't stutter on the floor.
+        self.target_left_tps = self._apply_deadband(lt)
+        self.target_right_tps = self._apply_deadband(rt)
 
     # ====================================================================
-    #  control loop: the single serial writer
+    #  the ONE control loop: ramp -> send (or true stop)
     # ====================================================================
     def control_loop(self):
-        # Watchdog: no recent command -> zero target.
+        # Watchdog: no command recently => command zero (then ramp down to stop).
         if time.time() - self.last_cmd_time > self.cmd_timeout:
             self.target_left_tps = 0.0
             self.target_right_tps = 0.0
 
-        # Firmware owns slew + friction floor; send target straight through.
-        if abs(self.target_left_tps) < 1e-3 and abs(self.target_right_tps) < 1e-3:
+        # Ramp current toward target (jerk-free accel + decel).
+        self.cur_left_tps = self._ramp(
+            self.cur_left_tps, self.target_left_tps, self.accel_step, self.decel_step)
+        self.cur_right_tps = self._ramp(
+            self.cur_right_tps, self.target_right_tps, self.accel_step, self.decel_step)
+
+        # If both targets AND current are essentially zero -> true stop.
+        if (abs(self.target_left_tps) < 1e-3 and abs(self.target_right_tps) < 1e-3
+                and abs(self.cur_left_tps) < 1.0 and abs(self.cur_right_tps) < 1.0):
+            self.cur_left_tps = 0.0
+            self.cur_right_tps = 0.0
             self.send_stop()
             return
 
-        self.send_velocity(self.target_left_tps, self.target_right_tps)
+        self.send_velocity(self.cur_left_tps, self.cur_right_tps)
 
     def send_velocity(self, left_tps, right_tps):
-        """Slot order crosses L/R: slot1 = our RIGHT, slot2 = our LEFT."""
+        """Send V command. Slot order crosses L/R per firmware convention:
+        slot1 = our RIGHT, slot2 = our LEFT."""
         if self.ser and self.ser.is_open:
             cmd = f"V,{right_tps:.0f},{left_tps:.0f}\n"
             try:
@@ -249,6 +308,7 @@ class SerialBridge(Node):
         raw_dr = right_ticks - self.prev_right_ticks
         dt = (now - self.last_odom_time).nanoseconds / 1e9
 
+        # Glitch guard: reject physically-impossible single-step jumps.
         max_ticks = self.max_wheel_vel * self.ticks_per_m * max(dt, 0.02) * 3.0
         if abs(raw_dl) > max_ticks or abs(raw_dr) > max_ticks:
             self.get_logger().warn(
