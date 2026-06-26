@@ -186,7 +186,7 @@ class IMUNode(Node):
             msg.orientation_covariance[0] = -1.0
             msg.angular_velocity.x = gx
             msg.angular_velocity.y = gy
-            msg.angular_velocity.z = -gz  # IMU yaw inverted: left turn must be +z (CCW)
+            msg.angular_velocity.z = gz
             msg.angular_velocity_covariance[0] = 0.01
             msg.angular_velocity_covariance[4] = 0.01
             msg.angular_velocity_covariance[8] = 0.01
