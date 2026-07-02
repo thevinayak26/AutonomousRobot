@@ -5,6 +5,7 @@
 #   bash ~/start_robot.sh --safe           — base + safety layer (teleop with collision avoidance)
 #   bash ~/start_robot.sh --explore        — base + safety + autonomous frontier exploration
 #   bash ~/start_robot.sh --benchmark      — base + coverage benchmark (drive manually)
+#   bash ~/start_robot.sh --camera         — base + camera feed (usb_cam + web_video_server on :8080)
 #   bash ~/start_robot.sh --explore --benchmark  — autonomous + benchmark
 #
 # Press Ctrl+C to stop everything.
@@ -13,11 +14,13 @@ set -e
 USE_SAFETY=false
 USE_EXPLORE=false
 USE_BENCHMARK=false
+USE_CAMERA=false
 for arg in "$@"; do
     case $arg in
         --safe)     USE_SAFETY=true ;;
         --explore)  USE_SAFETY=true; USE_EXPLORE=true ;;
         --benchmark) USE_BENCHMARK=true ;;
+        --camera)   USE_CAMERA=true ;;
     esac
 done
 echo ""
@@ -33,6 +36,9 @@ else
 fi
 if $USE_BENCHMARK; then
     echo "  Benchmark: ENABLED"
+fi
+if $USE_CAMERA; then
+    echo "  Camera: ENABLED (feed on :8080)"
 fi
 echo ""
 # Step 0: Sync clock via NTP (needs internet/WiFi)
@@ -130,6 +136,8 @@ pkill -f safety_layer 2>/dev/null || true
 pkill -f frontier_explorer 2>/dev/null || true
 pkill -f coverage_benchmark 2>/dev/null || true
 pkill -f rosbridge 2>/dev/null || true
+pkill -f usb_cam 2>/dev/null || true
+pkill -f web_video_server 2>/dev/null || true
 sleep 2
 echo "      Done."
 echo ""
@@ -158,7 +166,7 @@ EKF_PID=$!
 sleep 2
 # LiDAR
 echo "      Starting LiDAR..."
-ros2 run rplidar_ros rplidar_composition --ros-args -p serial_port:=/dev/ttyUSB0 -p serial_baudrate:=115200 -p scan_mode:=Standard &
+ros2 run rplidar_ros rplidar_composition --ros-args -p serial_port:=/dev/ttyUSB0 -p serial_baudrate:=115200 &
 LIDAR_PID=$!
 sleep 3
 # Static transform
@@ -186,9 +194,23 @@ sleep 2
 SAFETY_PID=""
 EXPLORE_PID=""
 BENCH_PID=""
+CAMERA_PID=""
+WEBVIDEO_PID=""
 # Step 6: Launch optional nodes
 echo "[7/7] Starting optional nodes..."
 echo ""
+if $USE_CAMERA; then
+    echo "      Starting camera (C270)..."
+    ros2 run usb_cam usb_cam_node_exe --ros-args \
+      -p video_device:=/dev/video0 -p image_width:=320 -p image_height:=240 \
+      -p framerate:=5.0 -p pixel_format:=yuyv -p io_method:=mmap &
+    CAMERA_PID=$!
+    sleep 2
+    echo "      Starting web_video_server (MJPEG on :8080)..."
+    ros2 run web_video_server web_video_server &
+    WEBVIDEO_PID=$!
+    sleep 1
+fi
 if $USE_SAFETY; then
     echo "      Starting safety layer..."
     ros2 run motor_bridge safety_layer &
@@ -223,6 +245,8 @@ echo "  rosbridge     : PID $ROSBRIDGE_PID"
 [ -n "$SAFETY_PID" ]  && echo "  Safety Layer  : PID $SAFETY_PID"
 [ -n "$EXPLORE_PID" ] && echo "  Explorer      : PID $EXPLORE_PID"
 [ -n "$BENCH_PID" ]   && echo "  Benchmark     : PID $BENCH_PID"
+[ -n "$CAMERA_PID" ]   && echo "  Camera        : PID $CAMERA_PID"
+[ -n "$WEBVIDEO_PID" ] && echo "  Web Video     : PID $WEBVIDEO_PID  (feed: http://<PI_IP>:8080/stream?topic=/image_raw)"
 echo ""
 if $USE_EXPLORE; then
     echo "  Robot will explore autonomously!"
@@ -244,8 +268,8 @@ echo ""
 cleanup() {
     echo ""
     echo "Stopping all nodes..."
-    kill $ROSBRIDGE_PID $SERIAL_PID $IMU_TF_PID $IMU_PID $EKF_PID $LIDAR_PID $TF_PID $SLAM_PID $SAFETY_PID $EXPLORE_PID $BENCH_PID 2>/dev/null
-    wait $ROSBRIDGE_PID $SERIAL_PID $IMU_TF_PID $IMU_PID $EKF_PID $LIDAR_PID $TF_PID $SLAM_PID $SAFETY_PID $EXPLORE_PID $BENCH_PID 2>/dev/null
+    kill $ROSBRIDGE_PID $SERIAL_PID $IMU_TF_PID $IMU_PID $EKF_PID $LIDAR_PID $TF_PID $SLAM_PID $SAFETY_PID $EXPLORE_PID $BENCH_PID $CAMERA_PID $WEBVIDEO_PID 2>/dev/null
+    wait $ROSBRIDGE_PID $SERIAL_PID $IMU_TF_PID $IMU_PID $EKF_PID $LIDAR_PID $TF_PID $SLAM_PID $SAFETY_PID $EXPLORE_PID $BENCH_PID $CAMERA_PID $WEBVIDEO_PID 2>/dev/null
     echo "All nodes stopped."
     exit 0
 }
