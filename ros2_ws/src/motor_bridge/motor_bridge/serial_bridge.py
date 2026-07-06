@@ -45,7 +45,7 @@ class SerialBridge(Node):
         self.declare_parameter('baud', 115200)
         self.declare_parameter('wheel_separation', 0.247)
         self.declare_parameter('ticks_per_metre', 5030.0)
-        self.declare_parameter('max_linear_vel', 0.40)
+        self.declare_parameter('max_linear_vel', 0.50)
         self.declare_parameter('max_angular_vel', 2.84)
         self.declare_parameter('publish_tf', False)
 
@@ -118,11 +118,14 @@ class SerialBridge(Node):
     #  helpers
     # ====================================================================
     def _vel_to_tps(self, vel):
-        """Affine velocity calibration: send = (|vel| + 0.0966) / 2.802, signed,
-        then * ticks_per_m. Firmware response is offset+scaled, not linear."""
+        """Identity velocity mapping with deadband offset:
+        send_tps = (|vel| + 0.0966) * ticks_per_m, signed.
+        Firmware V targets are plain tps (verified 2026-07-03 sweep, linear).
+        +0.0966 m/s flat offset retained to lift low commands above the
+        minPWM 30 deadband. Old affine /2.802 divisor removed."""
         if abs(vel) <= 1e-3:
             return 0.0
-        return math.copysign((abs(vel) + 0.0966) / 2.802, vel) * self.ticks_per_m
+        return math.copysign((abs(vel) + 0.0966) / 1.0, vel) * self.ticks_per_m
 
     # ====================================================================
     #  serial connect / read
