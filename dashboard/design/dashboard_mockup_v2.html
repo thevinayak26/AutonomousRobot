@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ATLAS · Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --disp:'Fraunces',serif; --ui:'Hanken Grotesk',sans-serif; --mono:'JetBrains Mono',monospace;
+  }
+  [data-theme="dark"]{
+    --bg:#13161b; --bg-grad:radial-gradient(ellipse 90% 70% at 80% -10%, rgba(45,212,191,.08), transparent 55%),
+                            radial-gradient(ellipse 70% 60% at 0% 110%, rgba(248,113,113,.05), transparent 50%);
+    --panel:#1b1f27; --panel-2:#20252e; --inset:#0f1216;
+    --line:#2a313b; --hair:#222831;
+    --txt:#e7eaee; --mid:#9aa4b1; --dim:#646e7b;
+    --accent:#2dd4bf; --accent-soft:rgba(45,212,191,.14); --accent-ink:#2dd4bf;
+    --coral:#fb7185; --gold:#fbbf24; --sky:#56b6e0;
+    --shadow:0 8px 30px rgba(0,0,0,.45); --shadow-sm:0 2px 10px rgba(0,0,0,.3);
+    --map-unknown:#262d37; --map-free:#161b22; --map-wall:#dfe6ec;
+  }
+  [data-theme="light"]{
+    --bg:#f4f1ea; --bg-grad:radial-gradient(ellipse 90% 70% at 80% -10%, rgba(13,148,136,.10), transparent 55%),
+                            radial-gradient(ellipse 70% 60% at 0% 110%, rgba(244,114,128,.07), transparent 50%);
+    --panel:#fffefb; --panel-2:#faf7f0; --inset:#eee9df;
+    --line:#e3ddd0; --hair:#ece7db;
+    --txt:#23282d; --mid:#5f6b76; --dim:#9aa3ad;
+    --accent:#0d9488; --accent-soft:rgba(13,148,136,.12); --accent-ink:#0b7c72;
+    --coral:#e5566b; --gold:#d9941a; --sky:#2f86c4;
+    --shadow:0 10px 34px rgba(60,55,40,.12); --shadow-sm:0 2px 12px rgba(60,55,40,.08);
+    --map-unknown:#e0dacd; --map-free:#f4f1ea; --map-wall:#3a4048;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    font-family:var(--ui); background:var(--bg); color:var(--txt);
+    background-image:var(--bg-grad); background-attachment:fixed;
+    overflow:hidden; font-size:13px; transition:background-color .5s, color .5s;
+  }
+  .mono{font-family:var(--mono)}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+  /* ---------- header ---------- */
+  header{
+    height:60px; display:flex; align-items:center; gap:20px; padding:0 22px;
+    border-bottom:1px solid var(--line);
+  }
+  .brand{display:flex;align-items:baseline;gap:11px}
+  .brand .logo{font-family:var(--disp);font-weight:600;font-size:27px;letter-spacing:.5px;color:var(--txt)}
+  .brand .logo b{color:var(--accent);font-style:italic}
+  .brand .tag{font-size:10px;letter-spacing:2.5px;color:var(--dim);text-transform:uppercase;font-weight:600}
+  .divider{width:1px;height:26px;background:var(--line)}
+  .clock{font-size:12px;color:var(--mid)} .clock b{font-family:var(--mono);color:var(--txt);font-weight:500}
+  .spacer{margin-left:auto}
+  .pill{display:flex;align-items:center;gap:9px;padding:7px 14px;border-radius:100px;
+    background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow-sm)}
+  .pill .k{font-size:9px;letter-spacing:1.5px;color:var(--dim);text-transform:uppercase;font-weight:600}
+  .pill .v{font-size:13px;font-weight:600}
+  .mode-pill .v{color:var(--accent)}
+  .blip{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 0 var(--accent);animation:beat 2s infinite}
+  @keyframes beat{0%{box-shadow:0 0 0 0 var(--accent-soft)}70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
+  .toggle{cursor:pointer;width:54px;height:28px;border-radius:100px;border:1px solid var(--line);
+    background:var(--inset);position:relative;transition:.3s;flex:0 0 auto}
+  .toggle .knob{position:absolute;top:2px;left:2px;width:22px;height:22px;border-radius:50%;
+    background:var(--accent);transition:.3s cubic-bezier(.4,1.4,.5,1);display:flex;align-items:center;justify-content:center;font-size:11px}
+  [data-theme="light"] .toggle .knob{transform:translateX(26px)}
+  .toggle .knob::after{content:"☾";color:var(--panel)}
+  [data-theme="light"] .toggle .knob::after{content:"☀"}
+
+  /* ---------- layout ---------- */
+  main{height:calc(100vh - 60px);padding:14px;display:grid;gap:14px;
+    grid-template-columns:1.55fr 1fr;
+    grid-template-rows:1fr 1fr 196px;
+    grid-template-areas:"map cam" "map tel" "strip strip";}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    box-shadow:var(--shadow);position:relative;overflow:hidden;
+    display:flex;flex-direction:column;opacity:0;transform:translateY(10px);
+    animation:rise .6s cubic-bezier(.2,.8,.2,1) forwards;transition:background-color .5s,border-color .5s}
+  @keyframes rise{to{opacity:1;transform:none}}
+  .card:nth-child(1){animation-delay:.05s}.card:nth-child(2){animation-delay:.12s}
+  .card:nth-child(3){animation-delay:.19s}.card:nth-child(4){animation-delay:.26s}
+  #c-map{grid-area:map}#c-cam{grid-area:cam}#c-tel{grid-area:tel}#c-strip{grid-area:strip}
+
+  .head{display:flex;align-items:center;gap:10px;padding:13px 17px;border-bottom:1px solid var(--hair)}
+  .head .ic{width:7px;height:7px;border-radius:2px;background:var(--accent);transform:rotate(45deg)}
+  .head h2{font-family:var(--disp);font-size:16px;font-weight:500;letter-spacing:.2px;color:var(--txt)}
+  .head .r{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:.5px}
+
+  /* ---------- map ---------- */
+  #mapBox{flex:1;position:relative;background:var(--inset)}
+  #map{position:absolute;inset:0;width:100%;height:100%}
+  .mhud{position:absolute;z-index:3;font-family:var(--mono);font-size:10.5px;letter-spacing:.4px}
+  .mhud.pose{top:14px;left:16px;color:var(--mid);background:var(--accent-soft);
+    padding:6px 11px;border-radius:8px;backdrop-filter:blur(4px)}
+  .mhud.legend{bottom:14px;left:16px;display:flex;gap:13px;flex-wrap:wrap}
+  .lg{display:flex;align-items:center;gap:5px;color:var(--mid);font-size:10px}
+  .lg .sw{width:9px;height:9px;border-radius:2px}
+
+  /* ---------- camera ---------- */
+  #c-cam .camview{flex:1;position:relative;margin:13px;border-radius:11px;overflow:hidden;
+    background:repeating-linear-gradient(125deg,var(--inset) 0 9px,var(--panel-2) 9px 18px)}
+  .camnoise{position:absolute;inset:0;opacity:.35;mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='90' height='90'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    animation:tv .3s steps(3) infinite}
+  @keyframes tv{to{transform:translate(-3px,1px)}}
+  .camchrome{position:absolute;inset:0;pointer-events:none}
+  .ccorner{position:absolute;width:18px;height:18px;border:2px solid rgba(127,127,127,.4)}
+  .ccorner.tl{top:10px;left:10px;border-right:0;border-bottom:0;border-radius:4px 0 0 0}
+  .ccorner.tr{top:10px;right:10px;border-left:0;border-bottom:0;border-radius:0 4px 0 0}
+  .ccorner.bl{bottom:10px;left:10px;border-right:0;border-top:0;border-radius:0 0 0 4px}
+  .ccorner.br{bottom:10px;right:10px;border-left:0;border-top:0;border-radius:0 0 4px 0}
+  .camstatus{position:absolute;top:14px;left:14px;display:flex;align-items:center;gap:7px;
+    font-family:var(--mono);font-size:10px;color:var(--coral);letter-spacing:1px;z-index:4}
+  .camstatus .d{width:7px;height:7px;border-radius:50%;background:var(--coral);animation:beat 1.5s infinite}
+  .camcenter{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:6px;z-index:3;text-align:center}
+  .camcenter .big{font-family:var(--disp);font-size:21px;color:var(--txt);font-weight:500;font-style:italic}
+  .camcenter .sub{font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:1.5px}
+  .camcenter .chip{margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--accent);
+    border:1px solid var(--accent);padding:4px 10px;border-radius:100px;letter-spacing:1px}
+  /* detection box preview (the YOLO future) */
+  .detbox{position:absolute;border:1.5px solid var(--accent);border-radius:5px;z-index:3;
+    width:32%;height:54%;left:34%;top:24%;opacity:.0;animation:det 6s ease-in-out infinite}
+  .detbox .lab{position:absolute;top:-19px;left:-1.5px;background:var(--accent);color:var(--panel);
+    font-family:var(--mono);font-size:9px;padding:2px 6px;border-radius:4px;font-weight:600;white-space:nowrap}
+  @keyframes det{0%,15%{opacity:0}25%,70%{opacity:.9}85%,100%{opacity:0}}
+
+  /* ---------- telemetry ---------- */
+  #c-tel .body{flex:1;padding:14px 17px;display:grid;grid-template-columns:1fr 1fr;
+    grid-auto-rows:1fr;gap:13px}
+  .stat{display:flex;flex-direction:column;justify-content:center}
+  .stat .k{font-size:9.5px;letter-spacing:1.4px;color:var(--dim);text-transform:uppercase;font-weight:600}
+  .stat .v{font-family:var(--mono);font-size:25px;font-weight:500;color:var(--txt);line-height:1.05;margin-top:3px}
+  .stat .v small{font-size:11px;color:var(--dim);font-weight:400}
+  .stat .v.accent{color:var(--accent)} .stat .v.gold{color:var(--gold)}
+  .track{height:4px;border-radius:3px;background:var(--inset);margin-top:7px;overflow:hidden}
+  .track i{display:block;height:100%;border-radius:3px;background:var(--accent);transition:width .5s ease;width:0}
+  .track.gold i{background:var(--gold)}
+
+  /* ---------- bottom strip ---------- */
+  #c-strip{flex-direction:row;padding:0}
+  .seg{flex:1;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--hair)}
+  .seg:last-child{border-right:0}
+  .seg.wide{flex:1.5}
+  .seghead{padding:10px 15px;display:flex;align-items:center;gap:8px}
+  .seghead h3{font-family:var(--disp);font-size:13.5px;font-weight:500;color:var(--mid)}
+  .seghead .ic{width:6px;height:6px;border-radius:2px;background:var(--accent);transform:rotate(45deg)}
+  .segbody{flex:1;padding:4px 15px 13px;display:flex;flex-direction:column;justify-content:center;min-height:0}
+
+  /* attitude */
+  .att{display:flex;align-items:center;gap:14px}
+  .att .vals{display:flex;flex-direction:column;gap:6px;font-family:var(--mono);font-size:11px}
+  .att .vals .row{display:flex;justify-content:space-between;gap:14px}
+  .att .vals .row .k{color:var(--dim)} .att .vals .row .v{color:var(--txt)}
+  .att .vals .row .v.ok{color:var(--accent)}
+
+  /* ultrasonic */
+  .uson{display:flex;gap:16px;align-items:flex-end;height:96px;padding-top:4px}
+  .ub{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;height:100%}
+  .utrk{flex:1;width:26px;border-radius:7px;background:var(--inset);position:relative;overflow:hidden}
+  .ufl{position:absolute;left:0;right:0;bottom:0;border-radius:7px;transition:height .35s,background .35s;background:var(--accent)}
+  .ulb{font-size:9px;color:var(--dim);letter-spacing:.4px}
+  .uvl{font-family:var(--mono);font-size:12px;color:var(--txt)}
+
+  /* event stream */
+  .stream{flex:1;display:flex;flex-direction:column-reverse;overflow:hidden;gap:1px}
+  .ev{display:flex;gap:9px;align-items:baseline;padding:3px 0;font-size:11.5px;animation:evin .4s ease}
+  @keyframes evin{from{opacity:0;transform:translateX(-7px)}to{opacity:1;transform:none}}
+  .ev .ts{font-family:var(--mono);font-size:9.5px;color:var(--dim);flex:0 0 auto}
+  .ev .dot{width:6px;height:6px;border-radius:50%;flex:0 0 auto;margin-top:5px}
+  .ev .ms{color:var(--mid);line-height:1.3}
+  .ev.ok .dot{background:var(--accent)} .ev.ok .ms{color:var(--txt)}
+  .ev.warn .dot{background:var(--gold)} .ev.warn .ms{color:var(--txt)}
+  .ev.alert .dot{background:var(--coral)} .ev.alert .ms{color:var(--coral)}
+  .ev.info .dot{background:var(--sky)} .ev.info .ms{color:var(--mid)}
+
+  /* health */
+  .hgrid{display:flex;flex-direction:column;gap:9px}
+  .hrow{display:flex;align-items:center;gap:9px;font-size:11px}
+  .hrow .k{color:var(--dim);flex:0 0 64px}
+  .hrow .v{font-family:var(--mono);color:var(--txt);margin-left:auto}
+  .hrow .v.ok{color:var(--accent)}
+  .hbar{flex:1;height:4px;border-radius:3px;background:var(--inset);overflow:hidden}
+  .hbar i{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width .5s}
+  .nodes{display:flex;gap:5px;margin-top:2px}
+  .nd{flex:1;height:6px;border-radius:2px;background:var(--accent);opacity:.85}
+  .nd.off{background:var(--inset);opacity:1}
+
+  /* waypoints */
+  .wp{display:flex;align-items:center;gap:9px;padding:4px 0;font-size:11.5px}
+  .wp .pin{width:8px;height:8px;border:1.5px solid var(--accent);transform:rotate(45deg);border-radius:2px;flex:0 0 auto}
+  .wp .nm{color:var(--txt)} .wp .co{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--dim)}
+  .wp.active .pin{background:var(--accent)} .wp.active .nm{color:var(--accent);font-weight:600}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="logo">Atl<b>a</b>s</span>
+    <span class="tag">Autonomous&nbsp;Console</span>
+  </div>
+  <div class="divider"></div>
+  <div class="clock">Mission&nbsp;T+&nbsp;<b id="clock">00:00:00</b></div>
+  <div class="spacer"></div>
+  <div class="pill mode-pill"><span class="k">Mode</span><span class="v" id="mode">Exploring</span></div>
+  <div class="pill"><span class="k">Rate</span><span class="v num" id="hz">30</span></div>
+  <div class="pill"><span class="blip"></span><span class="v" style="color:var(--accent)">Linked</span></div>
+  <div class="toggle" id="toggle" title="Toggle theme"><span class="knob"></span></div>
+</header>
+
+<main>
+  <!-- MAP -->
+  <section class="card" id="c-map">
+    <div class="head"><span class="ic"></span><h2>Live Map</h2>
+      <span class="r">slam_toolbox · odom→base_link [EKF]</span></div>
+    <div id="mapBox">
+      <div class="mhud pose" id="pose">X +0.00 · Y +0.00 · θ +0.0°</div>
+      <div class="mhud legend">
+        <span class="lg"><span class="sw" style="background:var(--map-wall)"></span>Wall</span>
+        <span class="lg"><span class="sw" style="background:var(--map-free)"></span>Free</span>
+        <span class="lg"><span class="sw" style="background:var(--map-unknown)"></span>Unknown</span>
+        <span class="lg"><span class="sw" style="background:var(--sky)"></span>LiDAR</span>
+        <span class="lg"><span class="sw" style="background:var(--accent)"></span>Robot</span>
+        <span class="lg"><span class="sw" style="background:var(--gold)"></span>Frontier</span>
+      </div>
+      <canvas id="map"></canvas>
+    </div>
+  </section>
+
+  <!-- CAMERA -->
+  <section class="card" id="c-cam">
+    <div class="head"><span class="ic"></span><h2>Camera</h2><span class="r">640×480 · 15 fps</span></div>
+    <div class="camview">
+      <div class="camnoise"></div>
+      <div class="camstatus"><span class="d"></span>NO&nbsp;SIGNAL</div>
+      <div class="detbox"><span class="lab">person · 0.94</span></div>
+      <div class="camchrome">
+        <span class="ccorner tl"></span><span class="ccorner tr"></span>
+        <span class="ccorner bl"></span><span class="ccorner br"></span>
+      </div>
+      <div class="camcenter">
+        <div class="big">Awaiting feed</div>
+        <div class="sub">CAMERA · MON 02 JUN</div>
+        <div class="chip">YOLO detection ready</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TELEMETRY -->
+  <section class="card" id="c-tel">
+    <div class="head"><span class="ic"></span><h2>Telemetry</h2><span class="r" id="telr">nominal</span></div>
+    <div class="body">
+      <div class="stat"><span class="k">Coverage</span><span class="v accent" id="cov">0<small>%</small></span><div class="track"><i id="covbar"></i></div></div>
+      <div class="stat"><span class="k">Frontiers</span><span class="v" id="fr">—<small> open</small></span></div>
+      <div class="stat"><span class="k">Distance</span><span class="v" id="dist">0.0<small> m</small></span></div>
+      <div class="stat"><span class="k">Velocity</span><span class="v gold" id="vel">0.00<small> m/s</small></span><div class="track gold"><i id="velbar"></i></div></div>
+    </div>
+  </section>
+
+  <!-- BOTTOM STRIP -->
+  <section class="card" id="c-strip">
+    <div class="seg">
+      <div class="seghead"><span class="ic"></span><h3>Attitude</h3></div>
+      <div class="segbody">
+        <div class="att">
+          <svg width="74" height="74" viewBox="0 0 74 74">
+            <circle cx="37" cy="37" r="30" fill="none" stroke="var(--inset)" stroke-width="5"/>
+            <g id="needle" transform="rotate(0 37 37)">
+              <polygon points="37,9 32,40 42,40" fill="var(--accent)"/>
+              <polygon points="37,65 32,40 42,40" fill="var(--inset)"/>
+            </g>
+            <circle cx="37" cy="37" r="3" fill="var(--txt)"/>
+          </svg>
+          <div class="vals">
+            <div class="row"><span class="k">YAW</span><span class="v" id="yaw">+0.0°</span></div>
+            <div class="row"><span class="k">GYRO&nbsp;Z</span><span class="v" id="gz">0.00</span></div>
+            <div class="row"><span class="k">IMU</span><span class="v ok">FUSED</span></div>
+            <div class="row"><span class="k">LIDAR</span><span class="v ok">OK</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="seg">
+      <div class="seghead"><span class="ic"></span><h3>Ultrasonic</h3></div>
+      <div class="segbody">
+        <div class="uson">
+          <div class="ub"><span class="uvl" id="u1v">1.20</span><div class="utrk"><div class="ufl" id="u1" style="height:60%"></div></div><span class="ulb">FRONT-LOW</span></div>
+          <div class="ub"><span class="uvl" id="u2v">0.31</span><div class="utrk"><div class="ufl" id="u2" style="height:18%"></div></div><span class="ulb">CLIFF ↓</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="seg wide">
+      <div class="seghead"><span class="ic"></span><h3>Event Stream</h3></div>
+      <div class="segbody"><div class="stream" id="stream"></div></div>
+    </div>
+
+    <div class="seg">
+      <div class="seghead"><span class="ic"></span><h3>System Health</h3></div>
+      <div class="segbody">
+        <div class="hgrid">
+          <div class="hrow"><span class="k">Link</span><div class="hbar"><i id="linkbar" style="width:88%"></i></div><span class="v ok" id="lat">12 ms</span></div>
+          <div class="hrow"><span class="k">Scan</span><div class="hbar"><i id="scanbar" style="width:95%"></i></div><span class="v" id="scanhz">9.8 Hz</span></div>
+          <div class="hrow"><span class="k">CPU</span><div class="hbar"><i id="cpubar" style="width:32%"></i></div><span class="v" id="cpu">32%</span></div>
+          <div>
+            <div class="hrow" style="margin-bottom:3px"><span class="k">Nodes</span><span class="v ok" id="nodetxt">7 / 7 up</span></div>
+            <div class="nodes" id="nodes"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="seg">
+      <div class="seghead"><span class="ic"></span><h3>Waypoints</h3></div>
+      <div class="segbody">
+        <div id="wps">
+          <div class="wp active"><span class="pin"></span><span class="nm">Dock</span><span class="co">0.0, 0.0</span></div>
+          <div class="wp"><span class="pin"></span><span class="nm">Desk A</span><span class="co">2.1, 1.4</span></div>
+          <div class="wp"><span class="pin"></span><span class="nm">Doorway</span><span class="co">-1.8, 2.9</span></div>
+          <div class="wp"><span class="pin"></span><span class="nm">Window</span><span class="co">3.3, -0.7</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+/* theme toggle (in-memory; resets on reload) */
+$('toggle').addEventListener('click',()=>{
+  const h=document.documentElement;
+  h.dataset.theme = h.dataset.theme==='dark' ? 'light' : 'dark';
+  setTimeout(()=>{resize();drawMap();},60);
+});
+
+/* ---------- nodes ---------- */
+const nodesEl=$('nodes');
+for(let i=0;i<7;i++){const d=document.createElement('div');d.className='nd';nodesEl.appendChild(d);}
+
+/* ---------- map sim ---------- */
+const cv=$('map'), cx=cv.getContext('2d');
+let W,H,DPR;
+function cssVar(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
+function resize(){
+  DPR=window.devicePixelRatio||1;
+  const b=$('mapBox'); W=b.clientWidth; H=b.clientHeight;
+  cv.width=W*DPR; cv.height=H*DPR; cx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener('resize',()=>{resize();drawMap();});
+
+const room={x:-3.2,y:-2.4,w:6.4,h:4.8};
+function w2p(wx,wy){
+  const pad=42, s=Math.min((W-pad*2)/room.w,(H-pad*2)/room.h);
+  return [W/2+wx*s, H/2-wy*s, s];
+}
+const GW=64,GH=48,TOTAL=GW*GH;
+const grid=new Int8Array(TOTAL).fill(-1), truth=new Int8Array(TOTAL);
+for(let gy=0;gy<GH;gy++)for(let gx=0;gx<GW;gx++){
+  const wx=room.x+(gx/GW)*room.w, wy=room.y+(gy/GH)*room.h;
+  const edge=(gx<2||gx>GW-3||gy<2||gy>GH-3);
+  const div=(Math.abs(wx+0.2)<0.13 && wy>-0.4);
+  truth[gy*GW+gx]= edge||div ? 100 : 0;
+}
+const path=[];
+(function(){const pts=[[-2.6,-1.8],[2.6,-1.8],[2.6,1.8],[-0.2,1.8],[-0.2,-0.4],[-2.6,-0.4],[-2.6,-1.8]];
+  for(let i=0;i<pts.length-1;i++){const[a,b]=[pts[i],pts[i+1]];for(let k=0;k<60;k++)path.push([a[0]+(b[0]-a[0])*k/60,a[1]+(b[1]-a[1])*k/60]);}})();
+let pi=0, robot={x:-2.6,y:-1.8,th:0}, trail=[], lidar=[], discovered=0;
+
+function reveal(){const R=1.5;
+  for(let gy=0;gy<GH;gy++)for(let gx=0;gx<GW;gx++){
+    const wx=room.x+(gx/GW)*room.w, wy=room.y+(gy/GH)*room.h;
+    if(Math.hypot(wx-robot.x,wy-robot.y)<R){const id=gy*GW+gx;if(grid[id]===-1){grid[id]=truth[id];discovered++;}}}}
+function cast(){lidar=[];
+  for(let a=0;a<360;a+=3){const rad=a*Math.PI/180;let r=0;
+    while(r<2.2){const px=robot.x+Math.cos(rad)*r,py=robot.y+Math.sin(rad)*r;
+      const gx=Math.floor((px-room.x)/room.w*GW),gy=Math.floor((py-room.y)/room.h*GH);
+      if(gx<0||gy<0||gx>GW-1||gy>GH-1)break;
+      if(truth[gy*GW+gx]===100){lidar.push([px,py]);break;}r+=0.05;}}}
+function drawMap(){
+  if(!W) return;
+  const cW=cssVar('--map-wall'),cF=cssVar('--map-free'),cU=cssVar('--map-unknown'),
+        cAcc=cssVar('--accent'),cSky=cssVar('--sky'),cGold=cssVar('--gold'),cInset=cssVar('--inset');
+  cx.clearRect(0,0,W,H);
+  const[,,s]=w2p(0,0); const cw=room.w/GW*s, ch=room.h/GH*s;
+  for(let gy=0;gy<GH;gy++)for(let gx=0;gx<GW;gx++){
+    const v=grid[gy*GW+gx];
+    const wx=room.x+(gx/GW)*room.w, wy=room.y+((gy+1)/GH)*room.h;
+    const[px,py]=w2p(wx,wy);
+    cx.fillStyle = v===-1?cU : v>=65?cW : cF;
+    cx.fillRect(px-0.5,py-0.5,cw+1,ch+1);
+  }
+  // lidar
+  cx.fillStyle=cSky;
+  lidar.forEach(([lx,ly])=>{const[px,py]=w2p(lx,ly);cx.beginPath();cx.arc(px,py,1.4,0,7);cx.fill();});
+  const[rpx,rpy]=w2p(robot.x,robot.y);
+  cx.strokeStyle=cSky+'22';
+  lidar.forEach(([lx,ly])=>{const[px,py]=w2p(lx,ly);cx.beginPath();cx.moveTo(rpx,rpy);cx.lineTo(px,py);cx.stroke();});
+  // trail
+  cx.strokeStyle=cAcc+'88';cx.lineWidth=2;cx.lineJoin='round';cx.beginPath();
+  trail.forEach(([tx,ty],i)=>{const[px,py]=w2p(tx,ty);i?cx.lineTo(px,py):cx.moveTo(px,py);});cx.stroke();
+  // frontiers
+  if(discovered<TOTAL*0.9){
+    for(let f=0;f<3;f++){const fa=robot.th+(f-1)*0.55,fx=robot.x+Math.cos(fa)*1.7,fy=robot.y+Math.sin(fa)*1.7;
+      const[px,py]=w2p(fx,fy);cx.fillStyle=cGold;cx.beginPath();cx.arc(px,py,3,0,7);cx.fill();
+      cx.strokeStyle=cGold+'55';cx.lineWidth=1;cx.beginPath();cx.arc(px,py,7,0,7);cx.stroke();}}
+  // robot
+  cx.save();cx.translate(rpx,rpy);cx.rotate(-robot.th);
+  cx.fillStyle=cAcc;cx.strokeStyle=cInset;cx.lineWidth=2.5;
+  cx.beginPath();cx.moveTo(12,0);cx.lineTo(-8,-8);cx.lineTo(-3,0);cx.lineTo(-8,8);cx.closePath();cx.fill();cx.stroke();
+  cx.restore();
+  cx.strokeStyle=cAcc+'33';cx.lineWidth=1.5;cx.beginPath();cx.arc(rpx,rpy,15,0,7);cx.stroke();
+}
+
+/* ---------- telemetry ---------- */
+let t0=Date.now(), distM=0, lx=robot.x, ly=robot.y;
+const evs=[["ok","Frontier reached — advancing to next"],["info","Scan match · loop closure detected"],
+  ["ok","New frontier selected (nearest-first)"],["warn","Cliff sensor: floor edge, replanning"],
+  ["info","EKF corrected heading +1.2°"],["ok","Waypoint logged · Desk A"],
+  ["warn","Front-low: obstacle 0.31 m, slowing"],["alert","Person detected · 1.8 m · widening buffer"],
+  ["info","Coverage milestone · 50%"]];
+let evN=0;
+function logEv(){const[type,msg]=evs[Math.floor(Math.random()*evs.length)];
+  const s=$('stream');const el=document.createElement('div');el.className='ev '+type;
+  const d=new Date();const ts=String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');
+  el.innerHTML=`<span class="ts">${ts}</span><span class="dot"></span><span class="ms">${msg}</span>`;
+  s.appendChild(el);while(s.children.length>7)s.removeChild(s.firstChild);}
+
+function tick(){
+  pi=(pi+1)%path.length;const[nx,ny]=path[pi];
+  robot.th=Math.atan2(ny-robot.y,nx-robot.x);robot.x=nx;robot.y=ny;
+  trail.push([nx,ny]);if(trail.length>260)trail.shift();
+  distM+=Math.hypot(nx-lx,ny-ly);lx=nx;ly=ny;
+  reveal();cast();drawMap();
+  $('pose').textContent=`X ${robot.x>=0?'+':''}${robot.x.toFixed(2)} · Y ${robot.y>=0?'+':''}${robot.y.toFixed(2)} · θ ${(robot.th*180/Math.PI).toFixed(1)}°`;
+  const cov=Math.min(99,Math.round(discovered/TOTAL*100));
+  $('cov').innerHTML=cov+'<small>%</small>';$('covbar').style.width=cov+'%';
+  $('fr').innerHTML=(cov>90?0:3+Math.floor(Math.random()*4))+'<small> open</small>';
+  $('dist').innerHTML=distM.toFixed(1)+'<small> m</small>';
+  const v=0.12+Math.random()*0.08;$('vel').innerHTML=v.toFixed(2)+'<small> m/s</small>';$('velbar').style.width=(v/0.22*100)+'%';
+  const yd=robot.th*180/Math.PI;$('yaw').textContent=(yd>=0?'+':'')+yd.toFixed(1)+'°';
+  $('gz').textContent=(Math.random()*0.4-0.2).toFixed(2);$('needle').setAttribute('transform',`rotate(${yd} 37 37)`);
+  const u1=0.4+Math.random()*1.6,u2=0.05+Math.random()*0.35;
+  $('u1v').textContent=u1.toFixed(2);$('u1').style.height=Math.min(100,u1/2*100)+'%';
+  $('u1').style.background=u1<0.5?cssVar('--coral'):cssVar('--accent');
+  $('u2v').textContent=u2.toFixed(2);$('u2').style.height=Math.min(100,u2/0.5*100)+'%';
+  $('u2').style.background=u2<0.12?cssVar('--coral'):cssVar('--accent');
+}
+function slow(){
+  const s=Math.floor((Date.now()-t0)/1000);
+  $('clock').textContent=[s/3600,s/60%60,s%60].map(n=>String(Math.floor(n)).padStart(2,'0')).join(':');
+  $('hz').textContent=29+Math.floor(Math.random()*3);
+  $('lat').textContent=(9+Math.floor(Math.random()*8))+' ms';$('linkbar').style.width=(82+Math.random()*12)+'%';
+  $('scanhz').textContent=(9.5+Math.random()*0.6).toFixed(1)+' Hz';$('scanbar').style.width=(92+Math.random()*6)+'%';
+  const cpu=28+Math.floor(Math.random()*20);$('cpu').textContent=cpu+'%';$('cpubar').style.width=cpu+'%';
+  const wps=[...document.querySelectorAll('.wp')];wps.forEach(w=>w.classList.remove('active'));
+  wps[Math.floor(Date.now()/4000)%wps.length].classList.add('active');
+}
+window.addEventListener('load',()=>{
+  resize();
+  for(let i=0;i<5;i++)setTimeout(logEv,i*180);
+  setInterval(tick,95);setInterval(slow,1000);setInterval(logEv,2700);
+});
+</script>
+</body>
+</html>
