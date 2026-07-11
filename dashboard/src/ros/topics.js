@@ -56,6 +56,7 @@ export const TOPICS = {
   // RViz's "2D Nav Goal" uses; only meaningful while Nav2 is running (otherwise it
   // simply has no subscriber). Gated behind the map's nav-goal toggle.
   goal:       { name: '/goal_pose',  type: 'geometry_msgs/PoseStamped', status: 'live' },
+  voiceCommand: { name: '/voice_command', type: 'std_msgs/String',      status: 'node' },
   // TF tree - the map overlay composes map->odom->base_link from these to place the
   // robot + LiDAR scan in the map frame (so the scan shows ON the map without needing
   // a separate /robot_pose publisher). /tf_static is latched.

@@ -11,7 +11,7 @@ import SystemHealthSeg from './strip/SystemHealthSeg';
 import WaypointsSeg from './strip/WaypointsSeg';
 import GlowCard from './GlowCard';
 
-export default function StripCard({ robot, health, scanHz, events, pose, objects, link, loading, theme }) {
+export default function StripCard({ ros, status, robot, health, scanHz, events, pose, objects, link, loading, theme }) {
   return (
     <GlowCard id="c-strip" theme={theme}>
       <AttitudeSeg
@@ -34,7 +34,7 @@ export default function StripCard({ robot, health, scanHz, events, pose, objects
         healthOk={health.ok}
         loading={loading}
       />
-      <WaypointsSeg pose={pose} loading={loading} />
+      <WaypointsSeg ros={ros} status={status} pose={pose} loading={loading} />
     </GlowCard>
   );
 }

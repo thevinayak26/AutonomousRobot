@@ -1,0 +1,8 @@
+# Copy to locations.yaml and fill from RViz on the live robot (map frame).
+# Keys MUST match TARGETS in voice_parser.py.
+frame_id: map
+targets:
+  kitchen: {x: 0.0, y: 0.0, yaw: 0.0}
+  lab:     {x: 0.0, y: 0.0, yaw: 0.0}
+  door:    {x: 0.0, y: 0.0, yaw: 0.0}
+  charger: {x: 0.0, y: 0.0, yaw: 0.0}

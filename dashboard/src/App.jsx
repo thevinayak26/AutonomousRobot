@@ -25,7 +25,6 @@ import CameraCard from './components/CameraCard';
 import TelemetryCard from './components/TelemetryCard';
 import StripCard from './components/StripCard';
 import DiagCard from './components/DiagCard';
-import TeleopControl from './components/TeleopControl';
 
 const EMPTY_MAP_STATS = { pose: null, coverage: null, frontiers: null, scanHz: null };
 
@@ -81,6 +80,7 @@ export default function App() {
         hz={robot.odomHz}
         latency={health.latencyMs}
         status={status}
+        ros={ros}
         theme={theme}
         onToggleTheme={toggle}
       />
@@ -108,6 +108,8 @@ export default function App() {
           theme={theme}
         />
         <StripCard
+          ros={ros}
+          status={status}
           robot={robot}
           health={health}
           scanHz={scanHz}
@@ -128,7 +130,6 @@ export default function App() {
           theme={theme}
         />
       </main>
-      <TeleopControl ros={ros} status={status} />
     </>
   );
 }

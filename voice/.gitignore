@@ -1,0 +1,6 @@
+*.bin
+models/
+*.wav
+__pycache__/
+*.pyc
+locations.yaml

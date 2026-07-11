@@ -1,0 +1,2 @@
+# Stage 1-2: stdlib only. External binaries: sox, whisper.cpp.
+# Stage 3 (robot-side) will add: roslibpy>=1.5, PyYAML>=6.0

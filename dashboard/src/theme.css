@@ -830,9 +830,7 @@ main {
 
 /* ---------- WASD teleop (opt-in manual driving) ---------- */
 .teleop {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
+  position: relative;
   z-index: 60;
   display: flex;
   flex-direction: column;
@@ -2199,3 +2197,5 @@ main > .glow-card:nth-child(6) {
     border-bottom: 0;
   }
 }
+
+.teleop-hud { position: absolute; top: calc(100% + 10px); right: 0; }
