@@ -28,10 +28,10 @@ COMMANDS = {
 }
 
 TARGETS = {
-    "kitchen": ["kitchen", "रसोई", "rasoi", "ra so i", "cocina", "சமையலறை"],
-    "lab":     ["lab", "laboratory", "प्रयोगशाला", "prayogshala", "laboratorio"],
-    "door":    ["door", "दरवाजा", "darwaza", "darvaza", "puerta", "கதவு"],
-    "charger": ["charger", "charging", "चार्जर", "cargador"],
+    "dock":    ["dock", "docking", "डॉक", "dak", "charger", "charging", "चार्जर"],
+    "desk":    ["desk", "desk a", "deska", "table", "मेज", "मेज़", "mez", "escritorio"],
+    "window":  ["window", "खिड़की", "khidki", "ventana", "சாளரம்"],
+    "doorway": ["doorway", "door", "दरवाज", "darwaz", "puerta", "கதவு", "gate"],
 }
 
 TARGETLESS = {"STOP", "RETURN"}
@@ -84,12 +84,15 @@ def parse(transcript):
 
 
 _TESTS = [
-    ("go to the kitchen", {"command": "NAVIGATE", "target": "kitchen"}),
-    ("रसोई में जाओ", {"command": "NAVIGATE", "target": "kitchen"}),
-    ("Ra so i me jao", {"command": "NAVIGATE", "target": "kitchen"}),
-    ("rasoi me jao", {"command": "NAVIGATE", "target": "kitchen"}),
-    ("ve a la cocina", {"command": "NAVIGATE", "target": "kitchen"}),
-    ("navigate to the lab", {"command": "NAVIGATE", "target": "lab"}),
+    ("go to the dock", {"command": "NAVIGATE", "target": "dock"}),
+    ("go to the charger", {"command": "NAVIGATE", "target": "dock"}),
+    ("डॉक पर जाओ", {"command": "NAVIGATE", "target": "dock"}),
+    ("desk pe jao", {"command": "NAVIGATE", "target": "desk"}),
+    ("मेज पर जाओ", {"command": "NAVIGATE", "target": "desk"}),
+    ("go to the window", {"command": "NAVIGATE", "target": "window"}),
+    ("khidki ke paas jao", {"command": "NAVIGATE", "target": "window"}),
+    ("navigate to the doorway", {"command": "NAVIGATE", "target": "doorway"}),
+    ("दरवाजे पर जाओ", {"command": "NAVIGATE", "target": "doorway"}),
     ("stop", {"command": "STOP", "target": None}),
     ("रुको", {"command": "STOP", "target": None}),
     ("ruko", {"command": "STOP", "target": None}),
