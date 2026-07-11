@@ -31,6 +31,10 @@ from std_msgs.msg import String, Float32
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2 as pc2
 from std_msgs.msg import Header
+try:
+    import observability as obsv
+except ImportError:
+    obsv = None
 
 # ---------------- tunables (paper parameters) ----------------
 # Class-conditioned time-to-live in seconds. Detection older than its
@@ -73,7 +77,8 @@ DEPART_GAP_S = 2.0      # link up, no re-detection this long -> departure-candid
 DEPART_CONFIRM_S = 6.0  # candidate this long -> confirmed-departed (event)
 PRIOR_T = 30.0          # prior pseudo-exposure seconds (seeds lambda at TTL prior)
 REMATCH_DIST = 1.0       # same-class fresh track within this = flicker re-track, not departure
-NON_DEPARTING = {"chair", "couch", "bed", "potted plant"}  # dropout-prone static classes: never fire departure events; decay only via censored branch
+NON_DEPARTING = {"chair", "couch", "bed", "potted plant"}
+OBS_GATE = False  # Option 3 observability gate. OFF = behavior identical to 877ef74. Turn ON only for occlusion bag replay.  # dropout-prone static classes: never fire departure events; decay only via censored branch
 # --------------------------------------------------------------
 
 
@@ -101,6 +106,15 @@ class SemanticObstacles(Node):
         self.stats = {}   # cls -> {"D": events, "T": exposure seconds}
 
         self.create_subscription(String, "/detected_objects", self.on_det, 10)
+        self.scan_ranges = None
+        self.scan_meta = None
+        if OBS_GATE:
+            from sensor_msgs.msg import LaserScan
+            import tf2_ros
+            self.create_subscription(LaserScan, "/scan", self.on_scan, 5)
+            self.tf_buf = tf2_ros.Buffer()
+            self.tf_listener = tf2_ros.TransformListener(self.tf_buf, self)
+            self.get_logger().info("OBS_GATE ON: departure evidence gated on observability")
         self.pub = self.create_publisher(PointCloud2, "/semantic_obstacles", 5)
         self.sfi_pub = self.create_publisher(Float32, "/sfi", 5)
         self.create_timer(1.0 / PUBLISH_HZ, self.tick)
@@ -108,6 +122,23 @@ class SemanticObstacles(Node):
         self.get_logger().info(
             "semantic_obstacles up: class-conditioned TTL decay, "
             f"publish {PUBLISH_HZ} Hz on /semantic_obstacles")
+
+    def on_scan(self, msg):
+        self.scan_ranges = list(msg.ranges)
+        self.scan_meta = (msg.angle_min, msg.angle_increment,
+                          msg.range_min, msg.range_max)
+
+    def _lookup_pose(self):
+        try:
+            tr = self.tf_buf.lookup_transform("map", "base_link",
+                                              rclpy.time.Time())
+            q = tr.transform.rotation
+            yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                             1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+            return (tr.transform.translation.x,
+                    tr.transform.translation.y, yaw)
+        except Exception:
+            return None
 
     def on_det(self, msg):
         try:
@@ -136,11 +167,12 @@ class SemanticObstacles(Node):
                 best["x"], best["y"] = x, y
                 best["conf"] = d.get("conf", best["conf"])
                 best["t_last"] = now
+                best["t_obs"] = 0.0
                 best.pop("censored_T", None)
             else:
                 self.store.append({
                     "cls": cls, "x": x, "y": y,
-                    "conf": d.get("conf", 0.0), "t_last": now,
+                    "conf": d.get("conf", 0.0), "t_last": now, "t_obs": 0.0,
                 })
 
     def _stats(self, cls):
@@ -193,15 +225,23 @@ class SemanticObstacles(Node):
         if link_fresh:
             self.link_down_at = None
         dt = 1.0 / PUBLISH_HZ
+        pose = self._lookup_pose() if (OBS_GATE and obsv) else None
         keep = []
         for o in self.store:
             gap = now - o["t_last"]
+            egap = gap  # departure-evidence gap; wall-clock unless gated
+            if OBS_GATE and obsv:
+                is_obs = obsv.observable(
+                    pose, o["x"], o["y"], self.scan_ranges,
+                    self.scan_meta or (0.0, 0.0, 0.0, 0.0))
+                o["t_obs"] = obsv.accrue_observable_gap(o, now, dt, is_obs)
+                egap = o["t_obs"]
             lam = self.lambda_hat(o["cls"])
             if link_fresh:
                 self._stats(o["cls"])["T"] += dt   # time-at-risk accrues every tick
-                if gap < DEPART_GAP_S:
+                if egap < DEPART_GAP_S:
                     keep.append(o)            # confirmed-present
-                elif gap < DEPART_CONFIRM_S:
+                elif egap < DEPART_CONFIRM_S:
                     keep.append(o)            # departure-candidate
                 else:                          # confirmed-departed: check flicker first
                     if o["cls"] in NON_DEPARTING:
