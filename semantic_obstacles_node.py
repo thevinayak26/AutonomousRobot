@@ -73,6 +73,7 @@ DEPART_GAP_S = 2.0      # link up, no re-detection this long -> departure-candid
 DEPART_CONFIRM_S = 6.0  # candidate this long -> confirmed-departed (event)
 PRIOR_T = 30.0          # prior pseudo-exposure seconds (seeds lambda at TTL prior)
 REMATCH_DIST = 1.0       # same-class fresh track within this = flicker re-track, not departure
+NON_DEPARTING = {"chair", "couch", "bed", "potted plant"}  # dropout-prone static classes: never fire departure events; decay only via censored branch
 # --------------------------------------------------------------
 
 
@@ -203,6 +204,9 @@ class SemanticObstacles(Node):
                 elif gap < DEPART_CONFIRM_S:
                     keep.append(o)            # departure-candidate
                 else:                          # confirmed-departed: check flicker first
+                    if o["cls"] in NON_DEPARTING:
+                        keep.append(o)     # non-departing static class: persist, no event
+                        continue
                     rematch = any(
                         p2 is not o and p2["cls"] == o["cls"]
                         and (now - p2["t_last"]) < DEPART_GAP_S
