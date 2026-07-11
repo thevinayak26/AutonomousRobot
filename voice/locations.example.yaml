@@ -6,3 +6,4 @@ targets:
   desk:    {x: 0.0, y: 0.0, yaw: 0.0}
   window:  {x: 0.0, y: 0.0, yaw: 0.0}
   doorway: {x: 0.0, y: 0.0, yaw: 0.0}
+  chair:   {x: 0.0, y: 0.0, yaw: 0.0}

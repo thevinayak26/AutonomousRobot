@@ -32,6 +32,7 @@ TARGETS = {
     "desk":    ["desk", "desk a", "deska", "table", "मेज", "मेज़", "mez", "escritorio"],
     "window":  ["window", "खिड़की", "khidki", "ventana", "சாளரம்"],
     "doorway": ["doorway", "door", "दरवाज", "darwaz", "puerta", "கதவு", "gate"],
+    "chair":   ["chair", "कुर्सी", "kursi", "silla", "நாற்காலி"],
 }
 
 TARGETLESS = {"STOP", "RETURN"}
@@ -93,6 +94,9 @@ _TESTS = [
     ("khidki ke paas jao", {"command": "NAVIGATE", "target": "window"}),
     ("navigate to the doorway", {"command": "NAVIGATE", "target": "doorway"}),
     ("दरवाजे पर जाओ", {"command": "NAVIGATE", "target": "doorway"}),
+    ("go to the chair", {"command": "NAVIGATE", "target": "chair"}),
+    ("kursi ke paas jao", {"command": "NAVIGATE", "target": "chair"}),
+    ("कुर्सी पर जाओ", {"command": "NAVIGATE", "target": "chair"}),
     ("stop", {"command": "STOP", "target": None}),
     ("रुको", {"command": "STOP", "target": None}),
     ("ruko", {"command": "STOP", "target": None}),
