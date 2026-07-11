@@ -66,6 +66,7 @@ def main():
             super().__init__("atlas_voice_bridge")
             self.loc=locations; self.dry=a.dry_run
             self.nav=ActionClient(self, NavigateToPose, "navigate_to_pose")
+            self.goal_handle=None
             self.create_subscription(String, "/voice_command", self.on_cmd, 10)
             self.get_logger().info(f"bridge up. targets={list(locations.get('targets',{}))} dry={self.dry}")
         def on_cmd(self,msg):
@@ -76,8 +77,9 @@ def main():
             if act=="ignore": self.get_logger().info(f"ignoring: {pl}"); return
             if act=="cancel":
                 self.get_logger().info("STOP: cancelling goals")
-                if not self.dry:
-                    self.nav.destroy(); self.nav=ActionClient(self,NavigateToPose,"navigate_to_pose")
+                if not self.dry and self.goal_handle is not None:
+                    self.goal_handle.cancel_goal_async()
+                    self.get_logger().info("cancel request sent to Nav2")
                 return
             if act=="navigate": self.send(pl)
         def send(self,p):
@@ -90,7 +92,14 @@ def main():
             if self.dry: self.get_logger().info("dry-run: not sent"); return
             if not self.nav.wait_for_server(timeout_sec=3.0):
                 self.get_logger().error("Nav2 not available"); return
-            self.nav.send_goal_async(g)
+            fut=self.nav.send_goal_async(g)
+            fut.add_done_callback(self._on_goal_response)
+        def _on_goal_response(self,fut):
+            gh=fut.result()
+            if gh is None or not gh.accepted:
+                self.get_logger().error("goal rejected by Nav2"); self.goal_handle=None; return
+            self.goal_handle=gh
+            self.get_logger().info("goal accepted by Nav2")
     rclpy.init(); n=VB()
     try: rclpy.spin(n)
     except KeyboardInterrupt: pass

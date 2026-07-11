@@ -198,9 +198,9 @@ class IMUNode(Node):
             msg.linear_acceleration_covariance[8] = 0.1
             self.imu_pub.publish(msg)
 
-            # Periodic visibility into the tracker (~every 2s) — watch z converge toward 0.
+            # Periodic visibility into the tracker (~every 10s) — watch z converge toward 0.
             self._log_counter += 1
-            if self._log_counter >= int(self.rate * 2):
+            if self._log_counter >= int(self.rate * 10):
                 self._log_counter = 0
                 state = 'learning' if self._learning else 'FROZEN (moving)'
                 self.get_logger().info(

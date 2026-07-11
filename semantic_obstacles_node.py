@@ -72,6 +72,7 @@ SFI_HZ = 1.0
 DEPART_GAP_S = 2.0      # link up, no re-detection this long -> departure-candidate
 DEPART_CONFIRM_S = 6.0  # candidate this long -> confirmed-departed (event)
 PRIOR_T = 30.0          # prior pseudo-exposure seconds (seeds lambda at TTL prior)
+REMATCH_DIST = 1.0       # same-class fresh track within this = flicker re-track, not departure
 # --------------------------------------------------------------
 
 
@@ -201,12 +202,22 @@ class SemanticObstacles(Node):
                     keep.append(o)            # confirmed-present
                 elif gap < DEPART_CONFIRM_S:
                     keep.append(o)            # departure-candidate
-                else:                          # confirmed-departed: event
-                    st = self._stats(o["cls"])
-                    st["D"] += 1.0
-                    self.get_logger().info(
-                        f"departure: {o['cls']} after {gap:.1f}s, "
-                        f"lambda_hat={self.lambda_hat(o['cls']):.4f}")
+                else:                          # confirmed-departed: check flicker first
+                    rematch = any(
+                        p2 is not o and p2["cls"] == o["cls"]
+                        and (now - p2["t_last"]) < DEPART_GAP_S
+                        and math.hypot(p2["x"] - o["x"], p2["y"] - o["y"]) < REMATCH_DIST
+                        for p2 in self.store)
+                    if rematch:
+                        # same object re-tracked nearby: drop stale twin, NO event
+                        self.get_logger().info(
+                            f"flicker-rematch: {o['cls']} stale twin dropped, no departure")
+                    else:
+                        st = self._stats(o["cls"])
+                        st["D"] += 1.0
+                        self.get_logger().info(
+                            f"departure: {o['cls']} after {gap:.1f}s, "
+                            f"lambda_hat={self.lambda_hat(o['cls']):.4f}")
             else:
                 # censored branch: exposure was accrued live while link was
                 # fresh; during the outage no time-at-risk accrues (censored).
