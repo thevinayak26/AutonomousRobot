@@ -125,7 +125,9 @@ class SerialBridge(Node):
         minPWM 30 deadband. Old affine /2.802 divisor removed."""
         if abs(vel) <= 1e-3:
             return 0.0
-        return math.copysign((abs(vel) + 0.0966) / 1.0, vel) * self.ticks_per_m
+        a = abs(vel)
+        a = max(a + 0.0966, 0.05 + 0.0966)
+        return math.copysign(a, vel) * self.ticks_per_m
 
     # ====================================================================
     #  serial connect / read
@@ -208,6 +210,7 @@ class SerialBridge(Node):
         """Slot order crosses L/R: slot1 = our RIGHT, slot2 = our LEFT."""
         if self.ser and self.ser.is_open:
             cmd = f"V,{right_tps:.0f},{left_tps:.0f}\n"
+            print("TX:", cmd.strip())
             try:
                 with self.serial_lock:
                     self.ser.write(cmd.encode())

@@ -13,3 +13,5 @@ ekf_config.yaml.bak
 install/
 log/
 yolo26n.pt
+*.pre-*
+*.prestopfix

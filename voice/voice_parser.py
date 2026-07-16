@@ -1,125 +1,125 @@
 #!/usr/bin/env python3
-"""ATLAS voice-command parser (offline, rule-based, multilingual)."""
+"""ATLAS voice-command parser — Groq LLM, relative-motion schema.
+Converts a transcript into MOVE / TURN / STOP / CANCEL / null JSON.
+No ROS. No named locations. No map."""
 import json
+import os
 import sys
 
-COMMANDS = {
-    "NAVIGATE": {
-        "en": ["go", "move", "navigate", "head", "drive"],
-        "hi": ["जा", "चलो", "चल", "पहुँच"],
-        "hi_rom": ["jao", "jaao", "chalo", "chal"],
-        "es": ["ir", "ve", "anda"],
-        "ta": ["போ"],
-    },
-    "STOP": {
-        "en": ["stop", "halt", "freeze"],
-        "hi": ["रुको", "ठहरो"],
-        "hi_rom": ["ruko", "ruk", "thahro"],
-        "es": ["para", "detente", "alto"],
-        "ta": ["நிறுத்து"],
-    },
-    "RETURN": {
-        "en": ["return", "come back", "go back", "home"],
-        "hi": ["वापस", "घर"],
-        "hi_rom": ["wapas", "vapas", "ghar"],
-        "es": ["vuelve", "regresa"],
-        "ta": ["திரும்பு"],
-    },
-}
+from dotenv import load_dotenv
+from groq import Groq
 
-TARGETS = {
-    "dock":    ["dock", "docking", "डॉक", "dak", "charger", "charging", "चार्जर"],
-    "desk":    ["desk", "desk a", "deska", "table", "मेज", "मेज़", "mez", "escritorio"],
-    "window":  ["window", "खिड़की", "khidki", "ventana", "சாளரம்"],
-    "doorway": ["doorway", "door", "दरवाज", "darwaz", "puerta", "கதவு", "gate"],
-    "chair":   ["chair", "कुर्सी", "kursi", "silla", "நாற்காலி"],
-}
+load_dotenv()
 
-TARGETLESS = {"STOP", "RETURN"}
+MODEL = os.environ.get("PARSER_MODEL", "llama-3.3-70b-versatile")
+
+_client = None
 
 
-def _norm(s):
-    # collapse whitespace so "ra so i" and "rasoi" both have a chance
-    return " ".join(s.split())
+def _get_client():
+    global _client
+    if _client is None:
+        key = os.environ.get("GROQ_API_KEY")
+        if not key:
+            raise RuntimeError("GROQ_API_KEY not set (check your .env)")
+        _client = Groq(api_key=key)
+    return _client
 
 
-def _matches(text_low, text_raw, phrases):
-    text_low_ns = text_low.replace(" ", "")
-    for p in phrases:
-        target = text_low if p.isascii() else text_raw
-        if p.isascii():
-            # try normal substring, and space-stripped (handles "ra so i")
-            if p.lower() in text_low or p.replace(" ", "") in text_low_ns:
-                return True
-        else:
-            if p in text_raw:
-                return True
-    return False
+SYSTEM_PROMPT = """You convert a single spoken command transcript into JSON for a mobile robot.
+Only output raw JSON, nothing else. Use exactly one of these shapes:
+
+{"command":"MOVE","direction":"FORWARD","distance":3.0}
+{"command":"MOVE","direction":"BACKWARD","distance":1.5}
+{"command":"TURN","direction":"LEFT","angle":90}
+{"command":"TURN","direction":"RIGHT","angle":45}
+{"command":"STOP"}
+{"command":"CANCEL"}
+{"command":null}
+
+Rules:
+- direction for MOVE is always FORWARD or BACKWARD.
+- direction for TURN is always LEFT or RIGHT.
+- distance is in meters (a number). angle is in degrees (a number).
+- Never invent a destination, room, or location name. This robot has no map.
+  If the transcript names a place ("go to the kitchen"), output {"command":null}.
+- If the transcript doesn't clearly match MOVE, TURN, STOP, or CANCEL, output {"command":null}.
+- Output JSON only. No explanation, no markdown fences.
+"""
+
+_MOVE_DIRS = {"FORWARD", "BACKWARD"}
+_TURN_DIRS = {"LEFT", "RIGHT"}
+
+
+def _validate(obj):
+    if not isinstance(obj, dict):
+        return None
+    cmd = obj.get("command")
+    if cmd is None:
+        return {"command": None}
+    if cmd in ("STOP", "CANCEL"):
+        return {"command": cmd}
+    if cmd == "MOVE":
+        d = obj.get("direction")
+        if d not in _MOVE_DIRS:
+            return None
+        try:
+            dist = float(obj.get("distance"))
+        except (TypeError, ValueError):
+            return None
+        return {"command": "MOVE", "direction": d, "distance": dist}
+    if cmd == "TURN":
+        d = obj.get("direction")
+        if d not in _TURN_DIRS:
+            return None
+        try:
+            ang = float(obj.get("angle"))
+        except (TypeError, ValueError):
+            return None
+        return {"command": "TURN", "direction": d, "angle": ang}
+    return None
 
 
 def parse(transcript):
-    if not transcript:
-        return None
-    raw = _norm(transcript.strip())
-    low = raw.lower()
-    command = None
-    for cmd, langs in COMMANDS.items():
-        for phrases in langs.values():
-            if _matches(low, raw, phrases):
-                command = cmd
-                break
-        if command:
-            break
-    if command is None:
-        return None
-    if command in TARGETLESS:
-        return {"command": command, "target": None}
-    target = None
-    for tgt, phrases in TARGETS.items():
-        if _matches(low, raw, phrases):
-            target = tgt
-            break
-    if target is None:
-        return None
-    return {"command": command, "target": target}
+    """transcript (str) -> normalized command dict. Never raises on bad input."""
+    if not transcript or not transcript.strip():
+        return {"command": None}
+
+    client = _get_client()
+    resp = client.chat.completions.create(
+        model=MODEL,
+        temperature=0,
+        max_tokens=100,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": transcript.strip()},
+        ],
+    )
+    raw = resp.choices[0].message.content
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"command": None}
+
+    result = _validate(obj)
+    return result if result is not None else {"command": None}
 
 
 _TESTS = [
-    ("go to the dock", {"command": "NAVIGATE", "target": "dock"}),
-    ("go to the charger", {"command": "NAVIGATE", "target": "dock"}),
-    ("डॉक पर जाओ", {"command": "NAVIGATE", "target": "dock"}),
-    ("desk pe jao", {"command": "NAVIGATE", "target": "desk"}),
-    ("मेज पर जाओ", {"command": "NAVIGATE", "target": "desk"}),
-    ("go to the window", {"command": "NAVIGATE", "target": "window"}),
-    ("khidki ke paas jao", {"command": "NAVIGATE", "target": "window"}),
-    ("navigate to the doorway", {"command": "NAVIGATE", "target": "doorway"}),
-    ("दरवाजे पर जाओ", {"command": "NAVIGATE", "target": "doorway"}),
-    ("go to the chair", {"command": "NAVIGATE", "target": "chair"}),
-    ("kursi ke paas jao", {"command": "NAVIGATE", "target": "chair"}),
-    ("कुर्सी पर जाओ", {"command": "NAVIGATE", "target": "chair"}),
-    ("stop", {"command": "STOP", "target": None}),
-    ("रुको", {"command": "STOP", "target": None}),
-    ("ruko", {"command": "STOP", "target": None}),
-    ("come back home", {"command": "RETURN", "target": None}),
-    ("go", None),
-    ("what time is it", None),
-    ("", None),
+    "move forward 3 meters",
+    "go backward 1.5 meters",
+    "turn left 90 degrees",
+    "turn right 45",
+    "stop",
+    "cancel",
+    "go to the kitchen",
+    "what time is it",
 ]
-
-
-def _run_selftest():
-    passed = 0
-    for text, expected in _TESTS:
-        got = parse(text)
-        ok = got == expected
-        passed += ok
-        print(f"[{'PASS' if ok else 'FAIL'}] {text!r:40} -> {got}")
-    print(f"\n{passed}/{len(_TESTS)} tests passed")
-    return passed == len(_TESTS)
-
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         print(json.dumps(parse(" ".join(sys.argv[1:])), ensure_ascii=False))
     else:
-        _run_selftest()
+        for t in _TESTS:
+            print(f"{t!r:35} -> {parse(t)}")

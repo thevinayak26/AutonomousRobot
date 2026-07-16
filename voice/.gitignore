@@ -4,3 +4,4 @@ models/
 __pycache__/
 *.pyc
 locations.yaml
+.env

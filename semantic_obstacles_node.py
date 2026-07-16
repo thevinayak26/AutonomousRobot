@@ -20,6 +20,7 @@ obstacle layer of local and global costmaps (see instructions in the
 master doc, requires pasting current nav2 params first).
 """
 
+import os
 import json
 import math
 import time
@@ -51,6 +52,7 @@ CLASS_TTL = {
     "tv": 60.0,
 }
 DEFAULT_TTL = 20.0
+POLICY = os.environ.get("ATLAS_POLICY", "P3").upper()
 
 # Disc radius per class in metres (the semantic inflation)
 CLASS_RADIUS = {
@@ -229,6 +231,12 @@ class SemanticObstacles(Node):
         keep = []
         for o in self.store:
             gap = now - o["t_last"]
+            if POLICY == "P1":
+                keep.append(o); continue
+            if POLICY == "P2":
+                if gap <= CLASS_TTL.get(o["cls"], DEFAULT_TTL):
+                    keep.append(o)
+                continue
             egap = gap  # departure-evidence gap; wall-clock unless gated
             if OBS_GATE and obsv:
                 is_obs = obsv.observable(
