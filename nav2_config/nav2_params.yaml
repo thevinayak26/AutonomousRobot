@@ -36,7 +36,7 @@ controller_server:
 
     FollowPath:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      desired_linear_vel: 0.45           # YOUR CAP (0.8 x 0.66 break)
+      desired_linear_vel: 0.405           # YOUR CAP (0.8 x 0.66 break)
       lookahead_dist: 0.4
       min_lookahead_dist: 0.25
       max_lookahead_dist: 0.7
@@ -46,7 +46,9 @@ controller_server:
       use_collision_detection: true
       max_allowed_time_to_collision_up_to_carrot: 0.3
       use_regulated_linear_velocity_scaling: true
-      use_cost_regulated_linear_velocity_scaling: false
+      use_cost_regulated_linear_velocity_scaling: true
+      cost_scaling_dist: 0.5
+      cost_scaling_gain: 1.0
       regulated_linear_scaling_min_radius: 0.6
       regulated_linear_scaling_min_speed: 0.15
       use_rotate_to_heading: true
@@ -65,7 +67,7 @@ global_costmap:
       robot_base_frame: base_link
       robot_radius: 0.10                 # YOUR FOOTPRINT
       resolution: 0.05
-      track_unknown_space: false
+      track_unknown_space: true
       always_send_full_costmap: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       static_layer:
@@ -74,7 +76,7 @@ global_costmap:
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        observation_sources: scan semantic_cloud
+        observation_sources: scan
         scan:
           topic: /scan
           max_obstacle_height: 2.0
@@ -85,19 +87,10 @@ global_costmap:
           raytrace_min_range: 0.0
           obstacle_max_range: 10.0
           obstacle_min_range: 0.0
-        semantic_cloud:
-          topic: /semantic_obstacles
-          data_type: "PointCloud2"
-          marking: true
-          clearing: false
-          min_obstacle_height: 0.0
-          max_obstacle_height: 0.3
-          obstacle_max_range: 8.0
-          obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.35
+        inflation_radius: 0.22
 
 local_costmap:
   local_costmap:
@@ -113,11 +106,11 @@ local_costmap:
       resolution: 0.05
       robot_radius: 0.10
       always_send_full_costmap: true
-      plugins: ["obstacle_layer", "inflation_layer"]
+      plugins: ["obstacle_layer", "semantic_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        observation_sources: scan semantic_cloud
+        observation_sources: scan
         scan:
           topic: /scan
           max_obstacle_height: 2.0
@@ -128,15 +121,22 @@ local_costmap:
           raytrace_min_range: 0.0
           obstacle_max_range: 10.0
           obstacle_min_range: 0.0
+      semantic_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: semantic_cloud
+        footprint_clearing_enabled: true
         semantic_cloud:
           topic: /semantic_obstacles
           data_type: "PointCloud2"
           marking: true
           clearing: false
-          min_obstacle_height: 0.0
-          max_obstacle_height: 0.3
+          min_obstacle_height: -0.5
+          max_obstacle_height: 2.0
           obstacle_max_range: 8.0
           obstacle_min_range: 0.0
+          expected_update_rate: 0.0
+          observation_persistence: 3.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
@@ -192,6 +192,7 @@ velocity_smoother:
 lifecycle_manager_navigation:
   ros__parameters:
     autostart: true
+    bond_timeout: 20.0
     node_names:
       - controller_server
       - planner_server
@@ -208,7 +209,14 @@ collision_monitor:
     transform_tolerance: 0.5
     source_timeout: 1.0
     base_shift_correction: true
-    polygons: ["FootprintApproach"]
+    polygons: ["StopZone", "FootprintApproach"]
+    StopZone:
+      type: "polygon"
+      action_type: "stop"
+      points: "[[0.22, 0.16], [0.22, -0.16], [-0.14, -0.16], [-0.14, 0.16]]"
+      min_points: 4
+      visualize: true
+      enabled: true
     FootprintApproach:
       type: "polygon"
       action_type: "approach"
@@ -216,13 +224,13 @@ collision_monitor:
       time_before_collision: 1.2
       simulation_time_step: 0.1
       min_points: 6
-      visualize: false
+      visualize: true
       enabled: true
     observation_sources: ["scan"]
     scan:
       type: "scan"
       topic: "/scan"
-      min_height: 0.15
+      min_height: 0.05
       max_height: 2.0
       enabled: true
 

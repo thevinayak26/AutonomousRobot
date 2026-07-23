@@ -95,9 +95,39 @@ class SerialBridge(Node):
         self.latest_ticks = None
         self.ticks_lock = threading.Lock()
 
+        # ---- stall detection (collision without LiDAR evidence) --------
+        self.stall_accum = 0.0
+        self.stall_latched = False
+        self.STALL_TIME_S = 0.7
+        self.STALL_TPS_MIN = 450.0
+        self.STALL_TICK_EPS = 8
+        self.STALL_HOLD_S = 1.5
+        # ---- slip detection: odom says moving, LiDAR says static ------
+        self.prev_scan = None
+        self.slip_accum = 0.0
+        self.SLIP_ODOM_MIN = 0.06     # m/s claimed by wheels
+        self.SLIP_SCAN_EPS = 0.015    # mean |range| change, metres
+        self.SLIP_TIME_S = 1.0
+        self.last_odom_vx = 0.0
+        # ---- yaw slip: wheel-derived omega vs IMU gyro z --------------
+        self.imu_wz = 0.0
+        self.imu_rx = 0.0
+        self.yaw_slip_accum = 0.0
+        self.YAW_MISMATCH = 0.35      # rad/s disagreement
+        self.YAW_MIN_CMD = 0.20       # only check when actually turning
+        self.YAW_TIME_S = 1.0
+        self.stall_since = 0.0
+
         # ---- ROS interfaces --------------------------------------------
         self.cmd_sub = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
+        from sensor_msgs.msg import LaserScan, Imu
+        self.create_subscription(Imu, 'imu/data', self._on_imu, 10)
+        self.create_subscription(LaserScan, 'scan', self._on_scan, 5)
+        from std_msgs.msg import Bool
+        self.create_subscription(Bool, 'stall_reset', self._on_stall_reset, 10)
         self.odom_pub = self.create_publisher(Odometry, 'odom/wheel', 50)
+        from std_msgs.msg import Bool
+        self.stall_pub = self.create_publisher(Bool, 'stall', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # ---- timers -----------------------------------------------------
@@ -170,6 +200,43 @@ class SerialBridge(Node):
     # ====================================================================
     #  command intake (sets targets only)
     # ====================================================================
+    def _on_imu(self, msg):
+        self.imu_wz = msg.angular_velocity.z
+        self.imu_rx = time.time()
+
+    def _on_scan(self, msg):
+        import math as _m
+        cur = [r for r in msg.ranges if _m.isfinite(r) and 0.05 < r < 8.0]
+        if self.prev_scan is None or len(cur) != len(self.prev_scan):
+            self.prev_scan = cur
+            return
+        n = len(cur)
+        if n < 50:
+            self.prev_scan = cur
+            return
+        delta = sum(abs(a - b) for a, b in zip(cur, self.prev_scan)) / n
+        self.prev_scan = cur
+        dt = 1.0 / 7.0
+        if abs(self.last_odom_vx) > self.SLIP_ODOM_MIN and delta < self.SLIP_SCAN_EPS:
+            self.slip_accum += dt
+            if self.slip_accum >= self.SLIP_TIME_S and not self.stall_latched:
+                self.stall_latched = True
+                self.stall_since = time.time()
+                self.target_left_tps = 0.0
+                self.target_right_tps = 0.0
+                self.send_stop()
+                self.get_logger().error(
+                    f'SLIP LATCHED: odom vx={self.last_odom_vx:.2f} m/s but scan '
+                    f'delta={delta:.4f} m. Wheels spinning, robot static. Odom frozen.')
+        else:
+            self.slip_accum = 0.0
+
+    def _on_stall_reset(self, msg):
+        if not msg.data and self.stall_latched:
+            self.stall_latched = False
+            self.stall_accum = 0.0
+            self.get_logger().warn('Stall latch cleared by operator.')
+
     def cmd_vel_callback(self, msg):
         self.last_cmd_time = time.time()
         lin = msg.linear.x
@@ -194,6 +261,16 @@ class SerialBridge(Node):
     #  control loop: the single serial writer
     # ====================================================================
     def control_loop(self):
+        # Stall latch: commanded motion with no wheel motion = contact.
+        if self.stall_latched:
+            if time.time() - self.stall_since > self.STALL_HOLD_S:
+                self.stall_latched = False
+                self.stall_accum = 0.0
+                self.get_logger().warn('Stall auto-released, recovery may drive.')
+            else:
+                self.send_stop()
+                return
+
         # Watchdog: no recent command -> zero target.
         if time.time() - self.last_cmd_time > self.cmd_timeout:
             self.target_left_tps = 0.0
@@ -261,6 +338,31 @@ class SerialBridge(Node):
                 f'ODOM GLITCH rejected dL={raw_dl} dR={raw_dr} max={max_ticks:.0f} dt={dt:.3f}s')
             return
 
+        cmd_mag = max(abs(self.target_left_tps), abs(self.target_right_tps))
+        moved = max(abs(raw_dl), abs(raw_dr))
+        if cmd_mag > self.STALL_TPS_MIN and moved < self.STALL_TICK_EPS:
+            self.stall_accum += dt
+            if self.stall_accum >= self.STALL_TIME_S and not self.stall_latched:
+                self.stall_latched = True
+                self.stall_since = time.time()
+                self.target_left_tps = 0.0
+                self.target_right_tps = 0.0
+                self.send_stop()
+                from std_msgs.msg import Bool
+                m = Bool(); m.data = True
+                self.stall_pub.publish(m)
+                self.get_logger().error(
+                    f'STALL LATCHED: cmd={cmd_mag:.0f} tps, ticks moved={moved}. '
+                    'Motors halted, odometry frozen. Publish False to /stall to clear.')
+        else:
+            self.stall_accum = 0.0
+
+        if self.stall_latched:
+            self.prev_left_ticks = left_ticks
+            self.prev_right_ticks = right_ticks
+            self.last_odom_time = now
+            return
+
         delta_left = raw_dl / self.ticks_per_m
         delta_right = raw_dr / self.ticks_per_m
         self.prev_left_ticks = left_ticks
@@ -278,6 +380,24 @@ class SerialBridge(Node):
             return
 
         linear_vel = delta_dist / dt
+        self.last_odom_vx = linear_vel
+        _wz = delta_theta / dt
+        if (time.time() - self.imu_rx) < 0.5 and abs(_wz) > self.YAW_MIN_CMD:
+            if abs(_wz - self.imu_wz) > self.YAW_MISMATCH:
+                self.yaw_slip_accum += dt
+                if self.yaw_slip_accum >= self.YAW_TIME_S and not self.stall_latched:
+                    self.stall_latched = True
+                    self.stall_since = time.time()
+                    self.target_left_tps = 0.0
+                    self.target_right_tps = 0.0
+                    self.send_stop()
+                    self.get_logger().error(
+                        f'YAW SLIP LATCHED: wheels say {_wz:.2f} rad/s, IMU says '
+                        f'{self.imu_wz:.2f}. One wheel slipping. Odom frozen.')
+            else:
+                self.yaw_slip_accum = 0.0
+        else:
+            self.yaw_slip_accum = 0.0
         angular_vel = delta_theta / dt
 
         odom = Odometry()

@@ -59,6 +59,11 @@ CLASS_RADIUS = {
     "person": 0.40,       # bigger buffer around humans
     "dog": 0.35,
     "cat": 0.30,
+    "chair": 0.28,        # splayed base, LiDAR only sees the centre pole
+    "couch": 0.45,
+    "bed": 0.50,
+    "dining table": 0.40,
+    "potted plant": 0.25,
 }
 DEFAULT_RADIUS = 0.22
 

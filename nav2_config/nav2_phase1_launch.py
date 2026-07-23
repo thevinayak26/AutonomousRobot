@@ -58,8 +58,14 @@ def generate_launch_description():
             name='velocity_smoother',
             output='screen',
             parameters=[PARAMS],
-            remappings=[('cmd_vel', 'cmd_vel_nav'),
-                        ('cmd_vel_smoothed', 'cmd_vel')],
+            remappings=[('cmd_vel', 'cmd_vel_nav')],
+        ),
+        Node(
+            package='nav2_collision_monitor',
+            executable='collision_monitor',
+            name='collision_monitor',
+            output='screen',
+            parameters=[PARAMS],
         ),
         Node(
             package='nav2_lifecycle_manager',
@@ -68,12 +74,14 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'autostart': True,
+                'bond_timeout': 20.0,
                 'node_names': [
                     'controller_server',
                     'planner_server',
                     'behavior_server',
                     'bt_navigator',
                     'velocity_smoother',
+                    'collision_monitor',
                 ],
             }],
         ),
