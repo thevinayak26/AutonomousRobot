@@ -116,6 +116,12 @@ class SerialBridge(Node):
         self.YAW_MISMATCH = 0.35      # rad/s disagreement
         self.YAW_MIN_CMD = 0.20       # only check when actually turning
         self.YAW_TIME_S = 1.0
+        # ---- deflection: commanded straight but actually rotating -----
+        self.cmd_ang = 0.0
+        self.deflect_accum = 0.0
+        self.DEFLECT_CMD_MAX = 0.15   # rad/s: "we asked for straight"
+        self.DEFLECT_MEAS_MIN = 0.35  # rad/s: "but we are turning"
+        self.DEFLECT_TIME_S = 0.8
         self.stall_since = 0.0
 
         # ---- ROS interfaces --------------------------------------------
@@ -204,6 +210,26 @@ class SerialBridge(Node):
         self.imu_wz = msg.angular_velocity.z
         self.imu_rx = time.time()
 
+    def _check_deflection(self):
+        if (time.time() - self.imu_rx) > 0.5:
+            return
+        dt = 0.05
+        if (abs(self.cmd_ang) < self.DEFLECT_CMD_MAX
+                and abs(self.imu_wz) > self.DEFLECT_MEAS_MIN
+                and abs(self.last_odom_vx) > 0.03):
+            self.deflect_accum += dt
+            if self.deflect_accum >= self.DEFLECT_TIME_S and not self.stall_latched:
+                self.stall_latched = True
+                self.stall_since = time.time()
+                self.target_left_tps = 0.0
+                self.target_right_tps = 0.0
+                self.send_stop()
+                self.get_logger().error(
+                    f'DEFLECTION LATCHED: commanded ang={self.cmd_ang:.2f} rad/s '
+                    f'but IMU measures {self.imu_wz:.2f}. Robot deflected by contact.')
+        else:
+            self.deflect_accum = 0.0
+
     def _on_scan(self, msg):
         import math as _m
         cur = [r for r in msg.ranges if _m.isfinite(r) and 0.05 < r < 8.0]
@@ -254,6 +280,7 @@ class SerialBridge(Node):
         left_vel = max(-self.max_wheel_vel, min(self.max_wheel_vel, left_vel))
         right_vel = max(-self.max_wheel_vel, min(self.max_wheel_vel, right_vel))
 
+        self.cmd_ang = ang
         self.target_left_tps = self._vel_to_tps(left_vel)
         self.target_right_tps = self._vel_to_tps(right_vel)
 
@@ -270,6 +297,8 @@ class SerialBridge(Node):
             else:
                 self.send_stop()
                 return
+
+        self._check_deflection()
 
         # Watchdog: no recent command -> zero target.
         if time.time() - self.last_cmd_time > self.cmd_timeout:

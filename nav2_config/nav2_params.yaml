@@ -214,7 +214,7 @@ collision_monitor:
       type: "polygon"
       action_type: "stop"
       points: "[[0.22, 0.16], [0.22, -0.16], [-0.14, -0.16], [-0.14, 0.16]]"
-      min_points: 4
+      min_points: 2
       visualize: true
       enabled: true
     FootprintApproach:
@@ -223,7 +223,7 @@ collision_monitor:
       footprint_topic: "/local_costmap/published_footprint"
       time_before_collision: 1.2
       simulation_time_step: 0.1
-      min_points: 6
+      min_points: 2
       visualize: true
       enabled: true
     observation_sources: ["scan"]
