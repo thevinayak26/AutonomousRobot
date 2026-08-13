@@ -15,3 +15,9 @@ log/
 yolo26n.pt
 *.pre-*
 *.prestopfix
+*.PRE-*
+*.bak
+*.WORKING-*
+*.pre_*
+*.CAMPAIGN-FROZEN-*
+*.pre-*

@@ -82,7 +82,7 @@ slam_toolbox:
     resolution: 0.05
     max_laser_range: 12.0
     minimum_time_interval: 0.0
-    transform_timeout: 0.2
+    transform_timeout: 0.5
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000
     use_scan_matching: true
@@ -147,7 +147,7 @@ echo "[6/7] Starting core ROS nodes..."
 echo ""
 # Serial bridge (publishes /odom/wheel; EKF owns odom->base_link TF)
 echo "      Starting serial_bridge..."
-ros2 run motor_bridge serial_bridge &
+ros2 run motor_bridge serial_bridge --ros-args -p enable_ultrasonic:=false -p port:=/dev/serial/by-id/usb-Arduino__www.arduino.cc__0042_75835333933351C07180-if00 &
 SERIAL_PID=$!
 sleep 3
 # IMU static transform (IMU mounted flat, +X forward, back-left quarter)
@@ -167,7 +167,7 @@ EKF_PID=$!
 sleep 2
 # LiDAR
 echo "      Starting LiDAR..."
-ros2 run rplidar_ros rplidar_composition --ros-args -p serial_port:=/dev/ttyUSB0 -p serial_baudrate:=115200 &
+ros2 run rplidar_ros rplidar_composition --ros-args -p serial_port:=/dev/ttyUSB0 -p serial_baudrate:=115200 -p angle_compensate:=true &
 LIDAR_PID=$!
 sleep 3
 # Static transform
@@ -182,10 +182,21 @@ SLAM_PID=$!
 sleep 10
 # Activate SLAM lifecycle
 echo "      Activating SLAM..."
-ros2 lifecycle set /slam_toolbox configure
-sleep 2
-ros2 lifecycle set /slam_toolbox activate
-sleep 2
+slam_state=""
+for i in $(seq 1 40); do
+    slam_state=$(ros2 lifecycle get /slam_toolbox 2>/dev/null | head -1)
+    case "$slam_state" in
+        active*)       break ;;
+        inactive*)     ros2 lifecycle set /slam_toolbox activate  >/dev/null 2>&1 || true ;;
+        unconfigured*) ros2 lifecycle set /slam_toolbox configure >/dev/null 2>&1 || true ;;
+        *)             : ;;
+    esac
+    sleep 1
+done
+case "$slam_state" in
+    active*) echo "      SLAM active." ;;
+    *) echo "FATAL: slam_toolbox is '${slam_state:-undiscovered}', not active" >&2; exit 1 ;;
+esac
 # rosbridge (dashboard websocket on :9090)
 echo "      Starting rosbridge..."
 ros2 launch rosbridge_server rosbridge_websocket_launch.xml &

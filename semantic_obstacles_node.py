@@ -52,14 +52,23 @@ CLASS_TTL = {
     "tv": 60.0,
 }
 DEFAULT_TTL = 20.0
-POLICY = os.environ.get("ATLAS_POLICY", "P3").upper()
+POLICY = os.environ.get("ATLAS_POLICY", "").upper()  # --ATLAS-INSTRUMENT--
+if POLICY not in ("P1", "P2", "P3"):
+    import sys as _sys
+    _sys.stderr.write(
+        "\n[ATLAS FATAL] ATLAS_POLICY unset or invalid (got %r).\n"
+        "  Set it explicitly: ATLAS_POLICY=P2 python3 %s\n"
+        "  Refusing to default silently - every run must be attributable.\n\n"
+        % (POLICY, __file__))
+    _sys.exit(2)
+
 
 # Disc radius per class in metres (the semantic inflation)
 CLASS_RADIUS = {
     "person": 0.40,       # bigger buffer around humans
     "dog": 0.35,
     "cat": 0.30,
-    "chair": 0.28,        # splayed base, LiDAR only sees the centre pole
+    "chair": 0.37,        # splayed base, LiDAR only sees the centre pole
     "couch": 0.45,
     "bed": 0.50,
     "dining table": 0.40,
@@ -124,6 +133,15 @@ class SemanticObstacles(Node):
             self.get_logger().info("OBS_GATE ON: departure evidence gated on observability")
         self.pub = self.create_publisher(PointCloud2, "/semantic_obstacles", 5)
         self.sfi_pub = self.create_publisher(Float32, "/sfi", 5)
+        from rclpy.qos import QoSProfile, DurabilityPolicy  # --ATLAS-INSTRUMENT--
+        _latched = QoSProfile(depth=1)
+        _latched.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self.policy_pub = self.create_publisher(String, "/policy", _latched)
+        self.events_pub = self.create_publisher(String, "/atlas_events", 50)
+        _pm = String(); _pm.data = POLICY
+        self.policy_pub.publish(_pm)
+        self.get_logger().info(f"POLICY={POLICY} latched on /policy; "
+                               f"events on /atlas_events")
         self.create_timer(1.0 / PUBLISH_HZ, self.tick)
         self.create_timer(1.0 / SFI_HZ, self.publish_sfi)
         self.get_logger().info(
@@ -173,6 +191,7 @@ class SemanticObstacles(Node):
             if best is not None:
                 best["x"], best["y"] = x, y
                 best["conf"] = d.get("conf", best["conf"])
+                best["r"] = d.get("r", best.get("r"))
                 best["t_last"] = now
                 best["t_obs"] = 0.0
                 best.pop("censored_T", None)
@@ -180,6 +199,7 @@ class SemanticObstacles(Node):
                 self.store.append({
                     "cls": cls, "x": x, "y": y,
                     "conf": d.get("conf", 0.0), "t_last": now, "t_obs": 0.0,
+                    "r": d.get("r"),
                 })
 
     def _stats(self, cls):
@@ -214,6 +234,18 @@ class SemanticObstacles(Node):
             msg.data = num / den
         self.sfi_pub.publish(msg)
 
+    def _emit(self, cls, branch, o, gap, sfi_val=None):  # --ATLAS-INSTRUMENT--
+        st = self._stats(cls)
+        ev = {
+            "t": time.time(), "cls": cls, "branch": branch,
+            "gap": round(gap, 3),
+            "D_c": st.get("D", 0.0), "T_c": round(st.get("T", 0.0), 3),
+            "lambda_hat": round(self.lambda_hat(cls), 5),
+            "policy": POLICY,
+        }
+        m = String(); m.data = json.dumps(ev)
+        self.events_pub.publish(m)
+
     def tick(self):
         now = time.time()
 
@@ -237,10 +269,15 @@ class SemanticObstacles(Node):
         for o in self.store:
             gap = now - o["t_last"]
             if POLICY == "P1":
-                keep.append(o); continue
+                keep.append(o)
+                self._emit(o["cls"], "keep_all", o, gap)  # --ATLAS-INSTRUMENT-V2--
+                continue
             if POLICY == "P2":
                 if gap <= CLASS_TTL.get(o["cls"], DEFAULT_TTL):
                     keep.append(o)
+                    self._emit(o["cls"], "present", o, gap)  # --ATLAS-INSTRUMENT-V2--
+                else:
+                    self._emit(o["cls"], "ttl_expired", o, gap)  # --ATLAS-INSTRUMENT-V2--
                 continue
             egap = gap  # departure-evidence gap; wall-clock unless gated
             if OBS_GATE and obsv:
@@ -253,9 +290,9 @@ class SemanticObstacles(Node):
             if link_fresh:
                 self._stats(o["cls"])["T"] += dt   # time-at-risk accrues every tick
                 if egap < DEPART_GAP_S:
-                    keep.append(o)            # confirmed-present
+                    keep.append(o); self._emit(o["cls"], "present", o, egap)            # confirmed-present
                 elif egap < DEPART_CONFIRM_S:
-                    keep.append(o)            # departure-candidate
+                    keep.append(o); self._emit(o["cls"], "candidate", o, egap)            # departure-candidate
                 else:                          # confirmed-departed: check flicker first
                     if o["cls"] in NON_DEPARTING:
                         keep.append(o)     # non-departing static class: persist, no event
@@ -272,6 +309,7 @@ class SemanticObstacles(Node):
                     else:
                         st = self._stats(o["cls"])
                         st["D"] += 1.0
+                        self._emit(o["cls"], "confirmed_departed", o, gap)  # --ATLAS-INSTRUMENT--
                         self.get_logger().info(
                             f"departure: {o['cls']} after {gap:.1f}s, "
                             f"lambda_hat={self.lambda_hat(o['cls']):.4f}")
@@ -279,7 +317,7 @@ class SemanticObstacles(Node):
                 # censored branch: exposure was accrued live while link was
                 # fresh; during the outage no time-at-risk accrues (censored).
                 if math.exp(-lam * gap) >= P_MIN:
-                    keep.append(o)            # decaying on learned rate
+                    keep.append(o); self._emit(o["cls"], "censored", o, gap)            # decaying on learned rate
         self.store = keep
 
         # build cloud
@@ -287,7 +325,7 @@ class SemanticObstacles(Node):
         for o in self.store:
             pts.extend(disc_points(
                 o["x"], o["y"],
-                CLASS_RADIUS.get(o["cls"], DEFAULT_RADIUS)))
+                (o.get("r") or CLASS_RADIUS.get(o["cls"], DEFAULT_RADIUS))))
 
         header = Header()
         header.stamp = self.get_clock().now().to_msg()

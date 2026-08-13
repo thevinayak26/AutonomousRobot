@@ -10,6 +10,6 @@ slam_toolbox:
     minimum_travel_heading: 0.1
     scan_topic: /scan
     mode: mapping
-    map_update_interval: 2.0
+    map_update_interval: 0.5
     enable_interactive_mode: true
 

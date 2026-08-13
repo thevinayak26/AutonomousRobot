@@ -44,6 +44,7 @@ def generate_launch_description():
             name='behavior_server',
             output='screen',
             parameters=[PARAMS],
+            remappings=[('cmd_vel', 'cmd_vel_smoothed')],
         ),
         Node(
             package='nav2_bt_navigator',
@@ -75,6 +76,7 @@ def generate_launch_description():
             parameters=[{
                 'autostart': True,
                 'bond_timeout': 20.0,
+                'service_timeout': 20.0,
                 'node_names': [
                     'controller_server',
                     'planner_server',
